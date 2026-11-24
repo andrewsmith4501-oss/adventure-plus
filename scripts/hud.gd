@@ -19,9 +19,10 @@ const DANGER := Color("e8564a")
 
 class Hearts extends Control:
 	var hp := 10
+	var max_hp := 10
 
 	func _draw() -> void:
-		for i in 5:
+		for i in max_hp / 2:
 			var v := hp - i * 2
 			var col := Color("ff5a5a")
 			if v == 1:
@@ -101,7 +102,7 @@ func _ready() -> void:
 
 	hearts = Hearts.new()
 	hearts.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_place(hearts, 0, 0, 0, 0, 16, 14, 176, 46)
+	_place(hearts, 0, 0, 0, 0, 16, 14, 260, 46)
 	root.add_child(hearts)
 
 	state_label = Label.new()
@@ -266,7 +267,7 @@ func _make_screen(key: String, title: String, body: String) -> VBoxContainer:
 
 
 func _build_start_screen() -> void:
-	var box := _make_screen("start", "Adventure Plus", "Gather and build in the meadows of Hearthvale, then climb into the windswept Gale Steppes, where something stirs inside the great mesa. Talk to Bryn at the camp to begin.")
+	var box := _make_screen("start", "Adventure Plus", "Gather and build in the meadows of Hearthvale, help the villagers, solve the Loomwright shrine and climb into the windswept Gale Steppes, where something stirs inside the great mesa. Talk to Bryn at the camp to begin.")
 	var grid := GridContainer.new()
 	grid.columns = 2
 	grid.add_theme_constant_override("h_separation", 14)
@@ -278,7 +279,8 @@ func _build_start_screen() -> void:
 		["Left click", "Hold to break a block, click to attack"],
 		["Right click", "Place the selected block"],
 		["1 to 9, wheel", "Choose a hotbar slot"],
-		["F", "Talk, read, use"],
+		["F", "Talk, read, use, open, push a crate"],
+		["Q", "Switch the quest shown on screen"],
 		["C", "Open crafting"],
 		["V", "Switch between third and first person"],
 		["Esc", "Pause"],
@@ -318,10 +320,15 @@ func _slider(value: float) -> HSlider:
 
 
 func _build_craft_screen() -> void:
-	var box := _make_screen("craft", "Crafting", "Recipes use what is in your hotbar.")
+	var box := _make_screen("craft", "Crafting", "Recipes use what is in your hotbar. Some need a workbench nearby.")
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(500, 430)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	box.add_child(scroll)
 	recipes_box = VBoxContainer.new()
 	recipes_box.add_theme_constant_override("separation", 8)
-	box.add_child(recipes_box)
+	recipes_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(recipes_box)
 	var close := _button("Back to the world")
 	close.pressed.connect(func() -> void: craft_closed.emit())
 	box.add_child(close)
@@ -348,8 +355,9 @@ func set_paused_title(paused: bool) -> void:
 	play_button.text = "Resume" if paused else "Play"
 
 
-func set_hearts(hp: int) -> void:
+func set_hearts(hp: int, max_hp := 10) -> void:
 	hearts.hp = hp
+	hearts.max_hp = max_hp
 	hearts.queue_redraw()
 
 
@@ -393,8 +401,9 @@ func show_item_name(text: String) -> void:
 	_name_timer = 1.6
 
 
-## steps: [{"text", "done"}] for the main quest, side: the same for side goals.
-func set_quest(title: String, steps: Array, side: Array) -> void:
+## steps: [{"text", "done"}] for the tracked quest, side: the same for side
+## goals, footer: a hint line under the quest (empty for none).
+func set_quest(title: String, steps: Array, side: Array, footer := "") -> void:
 	for c in goals_box.get_children():
 		c.queue_free()
 	goals_box.add_child(_label(title.to_upper(), 12, ACCENT))
@@ -407,6 +416,8 @@ func set_quest(title: String, steps: Array, side: Array) -> void:
 			shown_next = true
 		var l := _label(("✓ " if is_done else "➜ ") + str(g["text"]), 14, INK_DIM if is_done else INK, true)
 		goals_box.add_child(l)
+	if footer != "":
+		goals_box.add_child(_label(footer, 12, INK_DIM))
 	if not side.is_empty():
 		var gap := Control.new()
 		gap.custom_minimum_size = Vector2(0, 4)

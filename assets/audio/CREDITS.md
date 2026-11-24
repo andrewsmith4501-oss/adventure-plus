@@ -11,7 +11,7 @@ To change a sound, edit its function in `tools/make_audio.py` and run:
 
 ```
 python3 tools/make_audio.py            # everything
-python3 tools/make_audio.py music      # or just sfx, ambience, music
+python3 tools/make_audio.py music      # or just sfx, ambience, music, more
 ```
 
 It needs Python 3 with numpy, and ffmpeg built with libvorbis.
@@ -22,6 +22,7 @@ It needs Python 3 with numpy, and ffmpeg built with libvorbis.
 | Blocks | hit_block, break_soft, break_stone, break_wood, break_leaves, break_glass, place, vent_place |
 | Combat | swing, enemy_hit, enemy_defeat, enemy_hop, hurt |
 | Quest and puzzles | goal, quest, plate_on, plate_off, door, node, talk1-3, craft, pickup, deny, ui_click |
+| Shrine and village | crate_push, chest_open, spring |
 | Wind | gust, gust_warn, glide_wind (loop), vent_loop (loop) |
 | Ambience (loops) | amb_meadow, amb_steppes, amb_hollow |
-| Music (loops) | music_hearthvale, music_steppes, music_hollow |
+| Music (loops) | music_hearthvale, music_steppes, music_hollow, music_shrine |

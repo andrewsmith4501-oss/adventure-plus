@@ -6,6 +6,7 @@ so the output is original and released under CC0 along with this script.
 Re-run it after changing a sound:
 
     python3 tools/make_audio.py          # needs numpy and ffmpeg (libvorbis)
+    python3 tools/make_audio.py more     # or one group: sfx, ambience, music, more
 
 Each sound is a function below. Loops (ambience, music) are rendered so the
 end wraps onto the start, which makes them loop without a click.
@@ -462,8 +463,49 @@ def music():
     write("music_hollow", ho + drone, 0.75, loop=True, quality=5)
 
 
+# ------------------------------------------------------------------ shrine and village (added later)
+
+def more():
+    """Sounds added with the Hearthroot Shrine, Wren and the caches. Uses its own
+    random seed so the earlier groups render exactly as before."""
+    global rng
+    rng = np.random.default_rng(31)
+    print("Shrine and village")
+
+    # Crate pushed across Loomstone: a short scrape over a low thud.
+    d = 0.5
+    scrape = fft_filter(noise(d), 250, 2200) * adsr(int(d * SR), 0.02, 0.25) * (0.7 + 0.3 * np.sin(2 * np.pi * 23 * t_axis(d)))
+    write("crate_push", scrape + 0.7 * drum(d, 95, 50, 0.1), 0.8)
+
+    # Chest: a creaky lid, then a little sparkle.
+    d = 1.3
+    buf = np.zeros(int(d * SR))
+    creak = sweep(330, 240, 0.35, "tri") * adsr(int(0.35 * SR), 0.05, 0.15) * (0.6 + 0.4 * np.sin(2 * np.pi * 31 * t_axis(0.35)))
+    place(buf, 0.5 * creak, 0.0)
+    place(buf, 0.6 * drum(0.3, 140, 70, 0.3), 0.3)
+    for i, m in enumerate((76, 81, 85, 88)):
+        place(buf, bell(mtof(m), 0.7) * 0.45, 0.38 + i * 0.07)
+    write("chest_open", reverb(buf, 1.0, 0.25), 0.75)
+
+    # Spring pad: a boing that rises, with a puff of air.
+    d = 0.7
+    t = t_axis(d)
+    f = 180 + 520 * (1 - np.exp(-t * 9))
+    boing = np.sin(2 * np.pi * np.cumsum(f) / SR) * env(int(d * SR), 0.003, 0.25) * (1 + 0.4 * np.sin(2 * np.pi * 14 * t))
+    write("spring", 0.7 * boing + 0.35 * fft_filter(noise(d), 600, 4000) * env(int(d * SR), 0.01, 0.12), 0.75)
+
+    # Hearthroot Shrine: calm and warm, marimba-like plucks over a soft pad, G lydian.
+    print("Music")
+    g_lyd = [55, 57, 59, 61, 62, 64, 66, 67, 69, 71]
+    sh = song(76, 16, [(43, "M"), (45, "M"), (43, "M"), (40, "m")], g_lyd,
+              lambda f, d: pluck(f, d, 0.5, 0.8) * 0.7 + bell(f * 2, d) * 0.15, seed=41, lead_density=0.45, arp=True, octave=12)
+    t = np.arange(len(sh)) / SR
+    drone = np.sin(2 * np.pi * mtof(31) * t) * 0.08
+    write("music_shrine", sh + drone, 0.75, loop=True, quality=5)
+
+
 if __name__ == "__main__":
     only = sys.argv[1:]
-    for name, fn in (("sfx", sfx), ("ambience", ambience), ("music", music)):
+    for name, fn in (("sfx", sfx), ("ambience", ambience), ("music", music), ("more", more)):
         if not only or name in only:
             fn()

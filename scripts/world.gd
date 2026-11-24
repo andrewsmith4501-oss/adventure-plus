@@ -30,13 +30,23 @@ const NODE_ON := 17
 const TABLET := 18
 const VENT := 19
 const LOOMVEIN := 20
+const WORKBENCH := 21
+const LADDER := 22
+const SPRING := 23
+const BRICKS := 24
+const THATCH := 25
+const LANTERN := 26
+const CRATE := 27
+const CHEST := 28
+const CHEST_OPEN := 29
+const FLAG := 30
 
 ## Blocks the player can't mine (dungeon structure and puzzle pieces).
-const UNBREAKABLE := [LOOMSTONE, LOOMVEIN, LOOMDOOR, PLATE, PLATE_ON, NODE, NODE_ON, TABLET]
+const UNBREAKABLE := [LOOMSTONE, LOOMVEIN, LOOMDOOR, PLATE, PLATE_ON, NODE, NODE_ON, TABLET, CRATE, CHEST, CHEST_OPEN]
 ## Blocks too smooth to climb.
 const UNCLIMBABLE := [LOOMSTONE, LOOMVEIN, LOOMDOOR]
 ## Blocks drawn at full brightness.
-const GLOWING := [CRYSTAL, LOOMVEIN, SKYGLASS, LOOMDOOR, NODE_ON, PLATE_ON, VENT]
+const GLOWING := [CRYSTAL, LOOMVEIN, SKYGLASS, LOOMDOOR, NODE_ON, PLATE_ON, VENT, LANTERN, SPRING]
 
 # Where the Gale Steppes start (the cliff line wobbles around this x).
 const STEPPE_X := 94
@@ -56,6 +66,17 @@ const MESA_TOP := 41
 # The Hearthvale camp, where the game starts.
 const CAMP_X := 24
 const CAMP_Z := 58
+# The Hearthroot Shrine, a Loomwright ruin in the hills across the river.
+const SHRINE_X0 := 62
+const SHRINE_X1 := 84
+const SHRINE_Z0 := 80
+const SHRINE_Z1 := 92
+const SHRINE_FY := 17
+# Wren's river crossing, north-east of camp.
+const FORD_Z := 40
+# A small meadow that floats above Hearthvale near the Steppes cliffs.
+const ISLE_X := 90
+const ISLE_Z := 24
 
 var data := PackedByteArray()
 var heights := PackedInt32Array()
@@ -66,6 +87,18 @@ var spawn := Vector3(28.5, 0.0, 60.5)
 var hollow := {}
 ## Updraft vents: Vector3i -> max column height in blocks.
 var vents := {}
+## Puzzle positions inside the Hearthroot Shrine, filled in by generate().
+var shrine := {}
+## Readable tablets: Vector3i -> key of the text (game.gd holds the words).
+var tablets := {}
+## Thread Nodes: Vector3i -> "hollow" or "shrine".
+var nodes := {}
+## Chests: Vector3i -> key of what is inside.
+var chests := {}
+## Wren's bridge: {"a": west end, "b": east end, "posts": [...]} (Vector2i x, z).
+var ford := {}
+## Handy places for tests and hints (the isle's height, the cave).
+var spots := {}
 
 var _chunks := {}
 var _dirty := {}
@@ -98,6 +131,16 @@ var colors := {
 	NODE_ON: {"all": Color(1.0, 0.82, 0.42)},
 	TABLET: {"top": Color(0.72, 0.66, 0.52), "side": Color(0.80, 0.73, 0.56), "bottom": Color(0.6, 0.55, 0.45)},
 	VENT: {"top": Color(0.86, 0.96, 1.0), "side": Color(0.46, 0.52, 0.60), "bottom": Color(0.4, 0.44, 0.5)},
+	WORKBENCH: {"top": Color(0.70, 0.52, 0.30), "side": Color(0.52, 0.36, 0.20), "bottom": Color(0.45, 0.32, 0.2)},
+	LADDER: {"top": Color(0.60, 0.44, 0.26), "side": Color(0.72, 0.55, 0.32), "bottom": Color(0.60, 0.44, 0.26)},
+	SPRING: {"top": Color(0.55, 0.95, 0.62), "side": Color(0.62, 0.48, 0.30), "bottom": Color(0.5, 0.4, 0.28)},
+	BRICKS: {"top": Color(0.66, 0.64, 0.62), "side": Color(0.60, 0.57, 0.55), "bottom": Color(0.5, 0.48, 0.46)},
+	THATCH: {"top": Color(0.84, 0.72, 0.38), "side": Color(0.74, 0.60, 0.30), "bottom": Color(0.6, 0.5, 0.28)},
+	LANTERN: {"top": Color(0.42, 0.30, 0.18), "side": Color(1.0, 0.84, 0.50), "bottom": Color(0.42, 0.30, 0.18)},
+	CRATE: {"top": Color(0.74, 0.62, 0.40), "side": Color(0.46, 0.50, 0.62), "bottom": Color(0.4, 0.42, 0.5)},
+	CHEST: {"top": Color(0.92, 0.72, 0.30), "side": Color(0.55, 0.36, 0.20), "bottom": Color(0.45, 0.3, 0.18)},
+	CHEST_OPEN: {"top": Color(0.30, 0.22, 0.14), "side": Color(0.48, 0.32, 0.19), "bottom": Color(0.45, 0.3, 0.18)},
+	FLAG: {"all": Color(0.90, 0.32, 0.26)},
 }
 
 # Each face: outward normal, its four corners, a baked light level and which
@@ -169,16 +212,22 @@ func surface_y(x: float, z: float) -> float:
 	return y + 0.01
 
 
-## "hearthvale", "steppes" or "hollow" for a world position.
+## "hearthvale", "steppes", "hollow" or "shrine" for a world position.
 func region_at(p: Vector3) -> String:
 	if in_hollow(p):
 		return "hollow"
+	if in_shrine(p):
+		return "shrine"
 	var edge := STEPPE_X + (fbm(p.z * 0.06, 3.0) - 0.5) * 10.0
 	return "steppes" if p.x > edge - 1.0 else "hearthvale"
 
 
 func in_hollow(p: Vector3) -> bool:
 	return p.x >= HOLLOW_X0 and p.x < HOLLOW_X1 + 1 and p.z >= HOLLOW_Z0 and p.z < HOLLOW_Z1 + 1 and p.y >= HOLLOW_FY - 1 and p.y < MESA_TOP
+
+
+func in_shrine(p: Vector3) -> bool:
+	return p.x >= SHRINE_X0 + 1 and p.x < SHRINE_X1 and p.z >= SHRINE_Z0 + 1 and p.z < SHRINE_Z1 and p.y >= SHRINE_FY - 1 and p.y < SHRINE_FY + 9
 
 
 ## True when nothing is overhead (gusts only reach you outdoors).
@@ -288,6 +337,7 @@ func generate() -> void:
 	var camp_h := heights[CAMP_X + CAMP_Z * W]
 	_flatten(CAMP_X - 8, CAMP_Z - 7, CAMP_X + 7, CAMP_Z + 7, camp_h, 3)
 	_flatten(HOLLOW_X0 - 9, HOLLOW_Z0 + 2, HOLLOW_X0 - 1, HOLLOW_Z1 - 2, HOLLOW_FY - 1, 3)
+	_flatten(SHRINE_X0 - 7, SHRINE_Z0 + 3, SHRINE_X0 - 1, SHRINE_Z1 - 3, SHRINE_FY - 1, 3)
 
 	for z in D:
 		for x in W:
@@ -317,6 +367,14 @@ func generate() -> void:
 	_set_raw(NEEDLE_X, needle_top + 1, NEEDLE_Z, STONE)
 	_set_raw(NEEDLE_X, needle_top + 2, NEEDLE_Z, CRYSTAL)
 	_build_hollow()
+	_build_shrine()
+	_build_ford()
+	_build_isle()
+	_build_cave()
+	_place_caches()
+	spots["camp_h"] = camp_h
+	tablets[Vector3i(CAMP_X + 1, camp_h + 1, CAMP_Z + 6)] = "riddles"
+	_set_raw(CAMP_X + 1, camp_h + 1, CAMP_Z + 6, TABLET)
 
 	for z in D:
 		for x in W:
@@ -369,6 +427,10 @@ func _plant_trees() -> void:
 		if get_b(x, h, z) != GRASS or h > 22:
 			continue
 		if absi(x - CAMP_X) < 10 and absi(z - CAMP_Z) < 9:
+			continue
+		if x > SHRINE_X0 - 10 and x < SHRINE_X1 + 2 and z > SHRINE_Z0 - 2 and z < SHRINE_Z1 + 2:
+			continue
+		if absi(z - FORD_Z) < 5 and absi(x - 56) < 12:
 			continue
 		if Vector2(x - spawn.x, z - spawn.z).length() < 4.0:
 			continue
@@ -456,6 +518,7 @@ func _build_hollow() -> void:
 	_fill(x1 - 2, fy, z0 + 2, x1 - 1, fy + 11, z1 - 2, LOOMSTONE)
 	var node := Vector3i(x1 - 1, fy + 12, mid)
 	_set_raw(node.x, node.y, node.z, NODE)
+	nodes[node] = "hollow"
 	var vent := Vector3i(x0 + 15, fy - 1, mid)
 	_set_raw(vent.x, vent.y, vent.z, VENT)
 	# Before the Node is restored the updraft stops short of the ledge
@@ -464,9 +527,11 @@ func _build_hollow() -> void:
 	var plates := [Vector3i(x0 + 3, fy - 1, z0 + 3), Vector3i(x0 + 9, fy - 1, z1 - 3)]
 	for p in plates:
 		_set_raw(p.x, p.y, p.z, PLATE)
-	var tablets := [Vector3i(x0 + 1, fy + 1, mid + 3), Vector3i(x0 + 14, fy + 1, z0 + 1)]
-	for t in tablets:
+	var tabs := [Vector3i(x0 + 1, fy + 1, mid + 3), Vector3i(x0 + 14, fy + 1, z0 + 1)]
+	for i in tabs.size():
+		var t: Vector3i = tabs[i]
 		_set_raw(t.x, t.y, t.z, TABLET)
+		tablets[t] = "hollow_%d" % i
 	# Glowing threads run around the walls.
 	_vein_band(fy + 3, x0 + 1, z0 + 1, x0 + 11, z1 - 1)
 	for y in [fy + 4, fy + 9, fy + 14]:
@@ -479,9 +544,293 @@ func _build_hollow() -> void:
 		"door": [Vector3i(x0 + 12, fy, mid - 1), Vector3i(x0 + 12, fy + 2, mid)],
 		"node": node,
 		"vent": vent,
-		"tablets": tablets,
+		"tablets": tabs,
 		"skylight": [Vector3i(vent.x - 1, fy + 16, vent.z - 1), Vector3i(vent.x + 1, MESA_TOP + 2, vent.z + 1)],
 	}
+
+
+## The Hearthroot Shrine: three rooms in a row. The first teaches pushing a
+## crate onto a plate, the crate hall needs two crates on two plates, and the
+## tall last room keeps its Thread Node on a smooth Loomstone ledge that you
+## have to build your way up to.
+func _build_shrine() -> void:
+	var fy := SHRINE_FY
+	var x0 := SHRINE_X0
+	var x1 := SHRINE_X1
+	var z0 := SHRINE_Z0
+	var z1 := SHRINE_Z1
+	var mid := (z0 + z1) / 2  # 86
+	_fill(x0, fy - 1, z0, x1, fy + 9, z1, LOOMSTONE)
+	# Grass and a few bushes over the roof, so it sits in the hill.
+	for z in range(z0, z1 + 1):
+		for x in range(x0, x1 + 1):
+			_set_raw(x, fy + 10, z, GRASS if _hash3(x, 0, z) > 0.2 else DIRT)
+			if _hash3(x, 1, z) > 0.92:
+				_set_raw(x, fy + 11, z, LEAVES)
+	# Entrance tunnel on the west side, facing the river and the camp.
+	_fill(x0 - 4, fy - 1, mid - 2, x0, fy + 3, mid + 1, LOOMSTONE)
+	_fill(x0 - 5, fy, mid - 1, x0, fy + 2, mid, AIR)
+	# Room 1: one crate, one plate.
+	_fill(x0 + 1, fy, z0 + 3, x0 + 6, fy + 4, z1 - 3, AIR)
+	# Room 2: the crate hall, with a pillar in the middle.
+	_fill(x0 + 8, fy, z0 + 1, x0 + 14, fy + 4, z1 - 1, AIR)
+	_fill(x0 + 11, fy, z0 + 7, x0 + 11, fy + 4, z0 + 7, LOOMSTONE)
+	# Room 3: tall, with a high ledge along the east wall.
+	_fill(x0 + 16, fy, z0 + 1, x1 - 1, fy + 8, z1 - 1, AIR)
+	_fill(x1 - 2, fy, z0 + 1, x1 - 1, fy + 3, z1 - 1, LOOMSTONE)
+	# A sealed niche on the ledge holds the shrine's chest.
+	_fill(x1 - 2, fy + 4, z1 - 3, x1 - 1, fy + 6, z1 - 1, LOOMSTONE)
+	_fill(x1 - 2, fy + 4, z1 - 2, x1 - 1, fy + 5, z1 - 1, AIR)
+	var veil := [Vector3i(x1 - 2, fy + 4, z1 - 3), Vector3i(x1 - 1, fy + 5, z1 - 3)]
+	_fill(veil[0].x, veil[0].y, veil[0].z, veil[1].x, veil[1].y, veil[1].z, LOOMDOOR)
+	var chest := Vector3i(x1 - 1, fy + 4, z1 - 1)
+	_set_raw(chest.x, chest.y, chest.z, CHEST)
+	chests[chest] = "shrine"
+	var node := Vector3i(x1 - 1, fy + 4, mid)
+	_set_raw(node.x, node.y, node.z, NODE)
+	nodes[node] = "shrine"
+	# Gates between the rooms.
+	var gate1 := [Vector3i(x0 + 7, fy, mid - 1), Vector3i(x0 + 7, fy + 2, mid)]
+	var gate2 := [Vector3i(x0 + 15, fy, mid - 1), Vector3i(x0 + 15, fy + 2, mid)]
+	for g in [gate1, gate2]:
+		_fill(g[0].x, g[0].y, g[0].z, g[1].x, g[1].y, g[1].z, LOOMDOOR)
+	var plates := [Vector3i(x0 + 6, fy - 1, z1 - 4), Vector3i(x0 + 13, fy - 1, z0 + 1), Vector3i(x0 + 13, fy - 1, z1 - 2)]
+	for p in plates:
+		_set_raw(p.x, p.y, p.z, PLATE)
+	var crates := [Vector3i(x0 + 3, fy, z1 - 4), Vector3i(x0 + 10, fy, z0 + 2), Vector3i(x0 + 9, fy, z1 - 3)]
+	for c in crates:
+		_set_raw(c.x, c.y, c.z, CRATE)
+	var tabs := {
+		Vector3i(x0 + 3, fy + 1, z0 + 2): "shrine_1",
+		Vector3i(x0 + 7, fy + 1, z0 + 2): "shrine_reset",
+		Vector3i(x0 + 18, fy + 1, z0): "shrine_3",
+	}
+	for t in tabs:
+		var tp: Vector3i = t
+		_set_raw(tp.x, tp.y, tp.z, TABLET)
+		tablets[tp] = tabs[t]
+	# Old scaffolding planks lie in the tall room, for anyone who came empty-handed.
+	for p in [Vector3i(x0 + 17, fy, z0 + 2), Vector3i(x0 + 18, fy, z0 + 2), Vector3i(x0 + 17, fy, z1 - 2),
+			Vector3i(x0 + 18, fy, z1 - 2), Vector3i(x0 + 17, fy, z0 + 4), Vector3i(x0 + 17, fy, z1 - 4)]:
+		_set_raw(p.x, p.y, p.z, PLANKS)
+	_vein_band(fy + 3, x0 + 1, z0 + 3, x0 + 6, z1 - 3)
+	_vein_band(fy + 3, x0 + 8, z0 + 1, x0 + 14, z1 - 1)
+	for y in [fy + 3, fy + 7]:
+		_vein_band(y, x0 + 16, z0 + 1, x1 - 1, z1 - 1)
+	shrine = {
+		"plates": plates,
+		"crates": crates,
+		"gate1": gate1,
+		"gate2": gate2,
+		"veil": veil,
+		"node": node,
+		"chest": chest,
+	}
+
+
+## The river crossing where Wren is stuck: two flag posts, one on each bank,
+## and Wren's cart on the east side.
+func _build_ford() -> void:
+	var z := FORD_Z
+	var rx := floori(river_x(z))
+	var wx := rx
+	while wx > rx - 14 and heights[wx + z * W] <= WATER:
+		wx -= 1
+	var ex := rx
+	while ex < rx + 14 and heights[ex + z * W] <= WATER:
+		ex += 1
+	ford = {"a": Vector2i(wx, z), "b": Vector2i(ex, z), "posts": []}
+	for x in [wx, ex]:
+		var g := heights[x + (z - 2) * W]
+		var top := maxi(g, WATER) + 3
+		for y in range(g + 1, top + 1):
+			_set_raw(x, y, z - 2, LOG)
+		_set_raw(x, top + 1, z - 2, FLAG)
+		ford["posts"].append(Vector3i(x, top + 1, z - 2))
+	# Wren's cart: a plank bed with bundles of thatch on it.
+	for dz in range(1, 4):
+		for dx in range(3, 5):
+			var g := heights[(ex + dx) + (z + dz) * W]
+			_set_raw(ex + dx, g + 1, z + dz, PLANKS)
+			if dz < 3:
+				_set_raw(ex + dx, g + 2, z + dz, THATCH)
+	ford["wren"] = Vector3(ex + 2.5, 0, z + 0.5)
+
+
+## A small floating meadow with a tree and a cache. You reach it by gliding.
+func _build_isle() -> void:
+	var r := 4.6
+	var top := 28
+	for z in range(ISLE_Z - 6, ISLE_Z + 7):
+		for x in range(ISLE_X - 6, ISLE_X + 7):
+			top = maxi(top, heights[x + z * W] + 9)
+	for z in range(ISLE_Z - 6, ISLE_Z + 7):
+		for x in range(ISLE_X - 6, ISLE_X + 7):
+			var dx := x - ISLE_X
+			var dz := z - ISLE_Z
+			var d := sqrt(dx * dx + dz * dz) / (r + (_hash3(x, 7, z) - 0.5) * 1.2)
+			if d >= 1.0:
+				continue
+			var depth := 1 + floori((1.0 - d) * 6.0)
+			for y in range(top - depth, top + 1):
+				var b := STONE
+				if y == top:
+					b = GRASS
+				elif y >= top - 2:
+					b = DIRT
+				_set_raw(x, y, z, b)
+	# A little tree.
+	var tx := ISLE_X - 1
+	var tz := ISLE_Z - 1
+	for y in range(1, 4):
+		_set_raw(tx, top + y, tz, LOG)
+	for dy in range(2, 5):
+		var rr := 1 if dy > 3 else 2
+		for ddx in range(-rr, rr + 1):
+			for ddz in range(-rr, rr + 1):
+				if get_b(tx + ddx, top + dy, tz + ddz) == AIR and absi(ddx) + absi(ddz) < rr + 2:
+					_set_raw(tx + ddx, top + dy, tz + ddz, LEAVES)
+	var chest := Vector3i(ISLE_X + 2, top + 1, ISLE_Z + 1)
+	_set_raw(chest.x, chest.y, chest.z, CHEST)
+	chests[chest] = "isle"
+	spots["isle_top"] = top
+
+
+## A cave under the western hills: a glowing chamber with a cache, reached
+## by a tunnel that opens on the lowest side of the hill.
+func _build_cave() -> void:
+	var best := Vector2i(36, 30)
+	var best_h := -1
+	for z in range(22, 40):
+		for x in range(26, 46):
+			var h := heights[x + z * W]
+			if h > best_h and absf(x - river_x(z)) > 9.0:
+				best_h = h
+				best = Vector2i(x, z)
+	var c := Vector3(best.x, 12.0, best.y)
+	for z in range(best.y - 5, best.y + 6):
+		for y in range(9, 16):
+			for x in range(best.x - 5, best.x + 6):
+				var q := Vector3((x - c.x) / 4.2, (y - c.y) / 2.4, (z - c.z) / 4.2)
+				if q.length() < 1.0 and y >= 10:
+					_set_raw(x, y, z, AIR)
+	# Tunnel toward whichever side of the hill drops away first.
+	var dirs := [Vector2i(-1, 0), Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1)]
+	var pick: Vector2i = dirs[0]
+	var pick_len := 99
+	for d in dirs:
+		for i in range(3, 24):
+			var x: int = best.x + d.x * i
+			var z: int = best.y + d.y * i
+			if x < 1 or z < 1 or x >= W - 1 or z >= D - 1:
+				break
+			if heights[x + z * W] <= 10:
+				if i < pick_len:
+					pick_len = i
+					pick = d
+				break
+	for i in range(0, pick_len + 1):
+		var x: int = best.x + pick.x * i
+		var z: int = best.y + pick.y * i
+		for w in [0, 1]:
+			var wx: int = x + (pick.y * w)
+			var wz: int = z + (pick.x * w)
+			for y in range(10, 13):
+				_set_raw(wx, y, wz, AIR)
+			if get_b(wx, 9, wz) == AIR:
+				_set_raw(wx, 9, wz, STONE)
+	# Glowing threads in the walls.
+	for z in range(best.y - 6, best.y + 7):
+		for y in range(9, 17):
+			for x in range(best.x - 6, best.x + 7):
+				if get_b(x, y, z) != STONE and get_b(x, y, z) != DIRT:
+					continue
+				var open := get_b(x + 1, y, z) == AIR or get_b(x - 1, y, z) == AIR or get_b(x, y + 1, z) == AIR or get_b(x, y, z + 1) == AIR or get_b(x, y, z - 1) == AIR
+				if open and _hash3(x, y, z) > 0.86:
+					_set_raw(x, y, z, LOOMVEIN)
+	var chest := Vector3i(best.x - pick.x * 2, 10, best.y - pick.y * 2)
+	_set_raw(chest.x, 9, chest.z, STONE)
+	_set_raw(chest.x, 10, chest.z, CHEST)
+	chests[chest] = "cave"
+	spots["cave_mouth"] = Vector2i(best.x + pick.x * pick_len, best.y + pick.y * pick_len)
+	spots["cave"] = Vector3i(best.x, 10, best.y)
+
+
+## Caches on two lonely mesas and a northern beach.
+func _place_caches() -> void:
+	for m in [[108, 30, "mesa"], [148, 86, "far_mesa"]]:
+		var x: int = m[0]
+		var z: int = m[1]
+		var y := H - 1
+		while y > 0 and get_b(x, y, z) == AIR:
+			y -= 1
+		_set_raw(x, y + 1, z, CHEST)
+		chests[Vector3i(x, y + 1, z)] = m[2]
+	var best := Vector2i(82, 10)
+	var best_h := -1
+	for z in range(4, 14):
+		for x in range(60, 92):
+			var h := heights[x + z * W]
+			if h > WATER and get_b(x, h, z) == SAND and (best_h < 0 or z < best.y):
+				best_h = h
+				best = Vector2i(x, z)
+	if best_h < 0:
+		best_h = heights[best.x + best.y * W]
+	_set_raw(best.x, best_h + 1, best.y, CHEST)
+	chests[Vector3i(best.x, best_h + 1, best.y)] = "beach"
+
+
+## A dry walking route across the river from one flag post to the other:
+## blocks to stand on above the water with two blocks of headroom, stepping
+## at most one block up or down. Returns the blocks walked on, or [].
+func ford_route() -> Array:
+	var a: Vector2i = ford["a"]
+	var b: Vector2i = ford["b"]
+	var bx0 := a.x - 2
+	var bx1 := b.x + 2
+	var bz0 := FORD_Z - 8
+	var bz1 := FORD_Z + 8
+	var prev := {}
+	var queue: Array = []
+	for y in range(WATER, H - 3):
+		if _standable(a.x, y, a.y):
+			var s := Vector3i(a.x, y, a.y)
+			queue.append(s)
+			prev[s] = s
+	var head := 0
+	var dirs := [Vector2i(1, 0), Vector2i(0, 1), Vector2i(0, -1), Vector2i(-1, 0)]
+	while head < queue.size():
+		var cur: Vector3i = queue[head]
+		head += 1
+		if cur.x == b.x and cur.z == b.y:
+			var route := [cur]
+			while prev[cur] != cur:
+				cur = prev[cur]
+				route.push_front(cur)
+			return route
+		for d in dirs:
+			var nx: int = cur.x + d.x
+			var nz: int = cur.z + d.y
+			if nx < bx0 or nx > bx1 or nz < bz0 or nz > bz1:
+				continue
+			for dy in [0, 1, -1]:
+				var n := Vector3i(nx, cur.y + dy, nz)
+				if prev.has(n) or not _standable(n.x, n.y, n.z):
+					continue
+				if dy == 1 and get_b(cur.x, cur.y + 3, cur.z) != AIR:
+					continue
+				prev[n] = cur
+				queue.append(n)
+	return []
+
+
+func _standable(x: int, y: int, z: int) -> bool:
+	if y < WATER:
+		return false
+	var b := get_b(x, y, z)
+	if b == AIR or b == LEAVES or b == FLAG or b == LADDER:
+		return false
+	return get_b(x, y + 1, z) == AIR and get_b(x, y + 2, z) == AIR
 
 
 ## Turns the Loomstone around an air box at height y into a dotted band of veins.

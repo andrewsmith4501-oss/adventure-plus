@@ -19,7 +19,11 @@ var grounded := false
 # State.
 var yaw := PI * 0.75
 var hp := 10
+var max_hp := 10
 var stamina := 100.0
+var max_stamina := 100.0
+## Gale Wings: a faster glider that sinks more slowly and tires you less.
+var wings := false
 var exhausted := false
 var stam_delay := 0.0
 var mode := "walk"  # walk, climb, mantle, glide
@@ -49,6 +53,7 @@ var first_person := false
 
 var held: Node3D
 var glider: Node3D
+var _wing_mats: Array = []
 var _hip_l: Node3D
 var _hip_r: Node3D
 var _sh_l: Node3D
@@ -117,10 +122,21 @@ func _build_model() -> void:
 	glider.position = Vector3(0, 2.55, 0.05)
 	glider.visible = false
 	add_child(glider)
-	_box(Vector3(2.6, 0.04, 1.1), Color("5fbf4f"), Vector3.ZERO, glider)
-	_box(Vector3(2.62, 0.05, 0.2), Color("f2b84b"), Vector3.ZERO, glider)
+	for part in [[Vector3(2.6, 0.04, 1.1), Color("5fbf4f")], [Vector3(2.62, 0.05, 0.2), Color("f2b84b")]]:
+		var mi := _box(part[0], part[1], Vector3.ZERO, glider)
+		_wing_mats.append((mi.mesh as BoxMesh).material)
 	for sx in [-0.35, 0.35]:
 		_box(Vector3(0.02, 0.75, 0.02), Color("4a3424"), Vector3(sx, -0.38, 0), glider)
+
+
+## Upgrades the glider to Gale Wings (longer, sky-blue wings).
+func set_wings() -> void:
+	wings = true
+	_wing_mats[0].albedo_color = Color("8fd0ff")
+	_wing_mats[1].albedo_color = Color("ffffff")
+	for c in glider.get_children():
+		if c is MeshInstance3D and c.mesh is BoxMesh and (c.mesh as BoxMesh).size.x > 2.0:
+			c.scale.x = 1.25
 
 
 ## Shows the selected item in the hero's right hand.
@@ -183,6 +199,15 @@ func _snap_wall(f: Vector3) -> Vector3:
 	if absf(f.x) > absf(f.z):
 		return Vector3(signf(f.x), 0, 0)
 	return Vector3(0, 0, signf(f.z))
+
+
+## True when the hero is climbing a ladder (no stamina needed).
+func on_ladder() -> bool:
+	for y_off in [1.2, 0.3]:
+		var b := world.block_at(Vector3(pos.x + wall.x * (hw + 0.25), pos.y + y_off, pos.z + wall.z * (hw + 0.25)))
+		if b == World.LADDER:
+			return true
+	return false
 
 
 ## True when the wall in direction w is too smooth to climb (Loomstone).
@@ -253,16 +278,16 @@ func update(dt: float, jump: bool) -> void:
 	if mode == "walk" and (grounded or in_water):
 		stam_delay -= dt
 		if stam_delay <= 0.0:
-			stamina = minf(100.0, stamina + (28.0 if exhausted else 40.0) * dt)
-		if exhausted and stamina >= 100.0:
+			stamina = minf(max_stamina, stamina + (28.0 if exhausted else 40.0) * dt)
+		if exhausted and stamina >= max_stamina:
 			exhausted = false
 
 	invuln -= dt
 	regen_t += dt
-	if regen_t > 7.0 and hp < 10:
+	if regen_t > 7.0 and hp < max_hp:
 		hp += 1
 		regen_t = 0.0
-		game.hud.set_hearts(hp)
+		game.hud.set_hearts(hp, max_hp)
 	if pos.y < -10.0:
 		pos = world.spawn
 		vel = Vector3.ZERO
@@ -276,12 +301,14 @@ func _update_climb(dt: float, r: Vector3, in_f: int, in_r: int, shift: bool, jum
 	var t := Vector3(-wall.z, 0, wall.x)
 	if t.dot(r) < 0.0:
 		t = -t
+	var ladder := on_ladder()
 	if leap_t > 0.0:
 		leap_t -= dt
 		vel = Vector3(0, 7, 0)
 	else:
-		vel = Vector3(t.x * in_r * 2.2 + wall.x * 0.6, in_f * 2.6, t.z * in_r * 2.2 + wall.z * 0.6)
-	use_stamina((11.0 if (in_f != 0 or in_r != 0) else 3.5) * dt + wind.length() * 1.6 * dt)
+		vel = Vector3(t.x * in_r * 2.2 + wall.x * 0.6, in_f * (3.6 if ladder else 2.6), t.z * in_r * 2.2 + wall.z * 0.6)
+	if not ladder:
+		use_stamina((11.0 if (in_f != 0 or in_r != 0) else 3.5) * dt + wind.length() * 1.6 * dt)
 	if jump:
 		if stamina >= 12.0:
 			use_stamina(18.0)
@@ -304,7 +331,7 @@ func _update_climb(dt: float, r: Vector3, in_f: int, in_r: int, shift: bool, jum
 		leap_t = 0.0
 	elif not chest and not feet:
 		mode = "walk"
-	elif shift or exhausted:
+	elif shift or (exhausted and not ladder):
 		mode = "walk"
 		vel = Vector3(-wall.x * 1.5, 0, -wall.z * 1.5)
 	elif grounded and in_f < 0:
@@ -316,14 +343,14 @@ func _update_glide(dt: float, f: Vector3, r: Vector3, in_f: int, in_r: int, shif
 	if lift > 0.0:
 		vel.y += (lift - vel.y) * minf(1.0, 3.0 * dt)
 	else:
-		vel.y += (-2.0 - vel.y) * minf(1.0, 5.0 * dt)
+		vel.y += ((-1.5 if wings else -2.0) - vel.y) * minf(1.0, 5.0 * dt)
 	# In an updraft you hang in the air column unless you steer out of it.
-	var cruise := (in_f * 5.0) if lift > 0.0 else (9.0 + in_f * 2.0)
+	var cruise := (in_f * 5.0) if lift > 0.0 else ((11.5 if wings else 9.0) + in_f * 2.0)
 	var target := f * cruise + r * (in_r * 3.0) + wind * 1.4
 	var k := minf(1.0, 2.2 * dt)
 	vel.x += (target.x - vel.x) * k
 	vel.z += (target.z - vel.z) * k
-	use_stamina(7.0 * dt)
+	use_stamina((4.5 if wings else 7.0) * dt)
 	if first_person:
 		yaw = cam_yaw
 	else:
@@ -372,15 +399,24 @@ func _update_walk(dt: float, f: Vector3, r: Vector3, in_f: int, in_r: int, shift
 			glide_dist = 0.0
 			start_glide()
 	var landed := world.move_entity(self, dt)
+	if grounded and vel.y <= 0.0 and world.block_at(pos + Vector3(0, -0.1, 0)) == World.SPRING:
+		vel.y = 18.0
+		grounded = false
+		glide_start_y = pos.y
+		glide_dist = 0.0
+		game.on_spring(pos)
+		return
 	if landed < -7.0 and not in_water:
 		game.audio.play("land", -6.0 if landed > -16.0 else 0.0)
 	if landed < -16.0 and not in_water:
 		game.hurt_player(ceili((-landed - 16.0) / 3.5), null)
 		game.toast("Ouch, a hard landing")
 	# Walking into a wall two blocks tall starts a climb.
-	if wish.length_squared() > 0.01 and not exhausted and not in_water:
+	if wish.length_squared() > 0.01 and not in_water:
 		var wd := wish.normalized()
 		var w := _snap_wall(wd)
+		if exhausted and world.block_at(Vector3(pos.x + w.x * (hw + 0.25), pos.y + 0.4, pos.z + w.z * (hw + 0.25))) != World.LADDER:
+			return
 		if _wall_probe(w, 1.2) and _wall_probe(w, 0.4) and wd.dot(w) > 0.6 and _smooth(w, 1.2):
 			_smooth_hint()
 		elif _wall_probe(w, 1.2) and _wall_probe(w, 0.4) and wd.dot(w) > 0.6:
@@ -465,9 +501,9 @@ func _footstep(volume_db: float) -> void:
 	if mode == "climb" or mode == "mantle":
 		b = world.block_at(pos + wall * 0.6 + Vector3(0, 1.0, 0))
 	var sound := "step_grass"
-	if b in [World.STONE, World.LOOMSTONE, World.LOOMVEIN, World.SKYGLASS, World.CRYSTAL, World.TABLET, World.VENT, World.PLATE, World.PLATE_ON]:
+	if b in [World.STONE, World.BRICKS, World.LOOMSTONE, World.LOOMVEIN, World.SKYGLASS, World.CRYSTAL, World.TABLET, World.VENT, World.PLATE, World.PLATE_ON]:
 		sound = "step_stone"
-	elif b in [World.PLANKS, World.LOG]:
+	elif b in [World.PLANKS, World.LOG, World.LADDER, World.WORKBENCH, World.CRATE, World.CHEST, World.CHEST_OPEN]:
 		sound = "step_wood"
 	game.audio.play(sound, volume_db, 0.12)
 

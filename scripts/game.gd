@@ -1,7 +1,8 @@
 extends Node3D
-## Adventure Plus: builds the world, the hero, Bryn, the Thornlings and the
-## HUD, and runs items, crafting, the first quest, the Windworn Hollow
-## puzzle, Gale Steppes gusts, updraft vents, block interaction and audio.
+## Adventure Plus: builds the world, the hero, Bryn, Wren, the Thornlings
+## and the HUD, and runs items, crafting, quests, the Windworn Hollow and
+## Hearthroot Shrine puzzles, hidden caches, Gale Steppes gusts, updraft
+## vents, spring pads, block interaction and audio.
 
 const World = preload("res://scripts/world.gd")
 const Player = preload("res://scripts/player.gd")
@@ -19,6 +20,12 @@ var items := {
 	"planks": {"name": "Planks", "color": Color("c79e61"), "block": World.PLANKS},
 	"skyglass": {"name": "Skyglass", "color": Color("9fccfa"), "block": World.SKYGLASS},
 	"vent": {"name": "Updraft Vent", "color": Color("dcf4ff"), "block": World.VENT},
+	"workbench": {"name": "Workbench", "color": Color("a8794a"), "block": World.WORKBENCH},
+	"ladder": {"name": "Ladder", "color": Color("b88a52"), "block": World.LADDER},
+	"spring": {"name": "Spring Pad", "color": Color("8cf29e"), "block": World.SPRING},
+	"bricks": {"name": "Stone Bricks", "color": Color("a3a09c"), "block": World.BRICKS},
+	"thatch": {"name": "Thatch", "color": Color("d6b860"), "block": World.THATCH},
+	"lantern": {"name": "Lantern", "color": Color("ffd680"), "block": World.LANTERN},
 	"stick": {"name": "Stick", "color": Color("a07a48")},
 	"wsword": {"name": "Wooden Sword", "color": Color("d6b27a"), "damage": 2},
 	"ssword": {"name": "Stone Sword", "color": Color("a9adb6"), "damage": 3},
@@ -30,16 +37,21 @@ var drops := {
 	World.GRASS: "dirt", World.DRYGRASS: "dirt", World.DIRT: "dirt", World.STONE: "stone",
 	World.SAND: "sand", World.LOG: "log", World.LEAVES: "leaves", World.PLANKS: "planks",
 	World.CRYSTAL: "shard", World.SKYGLASS: "skyglass", World.VENT: "vent",
+	World.WORKBENCH: "workbench", World.LADDER: "ladder", World.SPRING: "spring",
+	World.BRICKS: "bricks", World.THATCH: "thatch", World.LANTERN: "lantern",
 }
 var break_time := {
 	World.GRASS: 0.5, World.DRYGRASS: 0.5, World.DIRT: 0.45, World.SAND: 0.4, World.LOG: 0.9,
 	World.LEAVES: 0.2, World.PLANKS: 0.7, World.STONE: 2.4, World.CRYSTAL: 1.2,
-	World.SKYGLASS: 1.0, World.VENT: 0.8,
+	World.SKYGLASS: 1.0, World.VENT: 0.8, World.WORKBENCH: 0.8, World.LADDER: 0.4,
+	World.SPRING: 0.6, World.BRICKS: 2.0, World.THATCH: 0.3, World.LANTERN: 0.3, World.FLAG: 0.3,
 }
 var break_sound := {
 	World.LOG: "break_wood", World.PLANKS: "break_wood", World.STONE: "break_stone",
 	World.LEAVES: "break_leaves", World.CRYSTAL: "break_glass", World.SKYGLASS: "break_glass",
-	World.VENT: "break_stone",
+	World.VENT: "break_stone", World.WORKBENCH: "break_wood", World.LADDER: "break_wood",
+	World.SPRING: "break_wood", World.BRICKS: "break_stone", World.THATCH: "break_leaves",
+	World.LANTERN: "break_glass",
 }
 var recipes := [
 	{"out": "planks", "n": 4, "need": {"log": 1}},
@@ -49,36 +61,72 @@ var recipes := [
 	{"out": "ssword", "n": 1, "need": {"stone": 2, "stick": 1}},
 	{"out": "glider", "n": 1, "need": {"leaves": 8, "stick": 4}, "once": true},
 	{"out": "vent", "n": 1, "need": {"stone": 3, "skyglass": 1}, "unlock": "vent_recipe"},
+	{"out": "workbench", "n": 1, "need": {"planks": 4}},
+	{"out": "bricks", "n": 2, "need": {"stone": 2}, "station": "workbench"},
+	{"out": "thatch", "n": 2, "need": {"leaves": 4}, "station": "workbench"},
+	{"out": "lantern", "n": 2, "need": {"stick": 1, "skyglass": 1}, "station": "workbench"},
+	{"out": "ladder", "n": 3, "need": {"stick": 3}, "station": "workbench", "unlock": "wren_recipes"},
+	{"out": "spring", "n": 1, "need": {"planks": 3, "skyglass": 1}, "station": "workbench", "unlock": "wren_recipes"},
 ]
 
-# The first quest. Steps can be finished in any order; the panel shows
-# what's done and the next step only.
-const QUEST_TITLE := "The Stilled Wind"
-var quest := [
-	{"id": "talk", "text": "Talk to Bryn at the camp"},
-	{"id": "glider", "text": "Craft a Leaf Glider (C): 8 leaves, 4 sticks"},
-	{"id": "steppes", "text": "Climb the cliffs east into the Gale Steppes"},
-	{"id": "hollow", "text": "Find the Windworn Hollow in the great mesa"},
-	{"id": "door", "text": "Open the Hollow's sealed door"},
-	{"id": "node", "text": "Ride the updraft and restore the Thread Node"},
-	{"id": "return", "text": "Return to Bryn"},
+# Quests. Steps can be finished in any order; the panel shows the tracked
+# quest's finished steps and its next step only. The last step finishes it.
+var quests := [
+	{"title": "The Stilled Wind", "steps": [
+		{"id": "talk", "text": "Talk to Bryn at the camp"},
+		{"id": "glider", "text": "Craft a Leaf Glider (C): 8 leaves, 4 sticks"},
+		{"id": "steppes", "text": "Climb the cliffs east into the Gale Steppes"},
+		{"id": "hollow", "text": "Find the Windworn Hollow in the great mesa"},
+		{"id": "door", "text": "Open the Hollow's sealed door"},
+		{"id": "node", "text": "Ride the updraft and restore the Thread Node"},
+		{"id": "return", "text": "Return to Bryn"},
+	]},
+	{"title": "A Bridge for Wren", "steps": [
+		{"id": "wren_talk", "text": "Meet Wren by the river, north-east of camp"},
+		{"id": "bridge", "text": "Build a dry bridge between Wren's two flag posts"},
+		{"id": "wren_return", "text": "Tell Wren the bridge is ready"},
+	]},
+	{"title": "The Hearthroot Shrine", "steps": [
+		{"id": "shrine_find", "text": "Find the shrine in the hills south-east of camp, across the river"},
+		{"id": "gate1", "text": "Push the crate onto the plate (F to push)"},
+		{"id": "gate2", "text": "Weigh down both plates in the crate hall"},
+		{"id": "shrine_node", "text": "Get up to the high ledge and restore the Thread Node"},
+		{"id": "shrine_chest", "text": "Open the shrine's chest"},
+	]},
 ]
+var tracked := 0
+const CACHE_COUNT := 5
+var caches_found := 0
 var side := [
 	{"id": "enemy", "text": "Defeat a Thornling"},
 	{"id": "shard", "text": "Take the Sky Shard from Needle Rock"},
 	{"id": "glide", "text": "Glide far from a high cliff"},
 	{"id": "vent", "text": "Build an updraft vent", "needs": "vent_recipe"},
+	{"id": "caches", "text": "Find the lost caches (read the tablet at camp)"},
+	{"id": "spring", "text": "Launch yourself from a spring pad", "needs": "wren_recipes"},
 ]
 var done := {}
 
-const TABLET_TEXT := [
-	"Two stones wait for weight. A Mender cannot stand in two places at once... but a Mender can build.",
-	"The wind remembers the way up. Spread your wings above the vent and let it carry you.",
-]
+const TABLETS := {
+	"hollow_0": ["Two stones wait for weight. A Mender cannot stand in two places at once... but a Mender can build."],
+	"hollow_1": ["The wind remembers the way up. Spread your wings above the vent and let it carry you."],
+	"shrine_1": ["A crate cannot climb, but it can be pushed. Stand behind it and press F.", "(If a crate gets stuck, read this tablet again and it slides back.)"],
+	"shrine_reset": ["Weight on both plates opens the way. Think before you push: a crate in a corner stays there.", "(If a crate gets stuck, read this tablet again and they slide back.)"],
+	"shrine_3": ["This ledge is Loomstone, and no hand can climb it. But what a Mender builds, a Mender may climb."],
+	"riddles": [
+		"The Loomwrights hid five caches when the Fray began. Their riddles are carved here.",
+		"One: the small table of the Steppes stands alone to the north. Its top keeps a secret.",
+		"Two: a meadow floats above the cliff road, where no foot can reach. Only the wind can take you up.",
+		"Three: under the western hills, by the river, a mouth in the grass breathes cold air.",
+		"Four: far to the south-east, the last mesa watches the sea.",
+		"Five: where Hearthvale runs out of land in the north, the sand remembers.",
+	],
+}
 const REGIONS := {
 	"hearthvale": ["Hearthvale", "Meadows, rivers and a quiet camp"],
 	"steppes": ["Gale Steppes", "Mind the gusts"],
 	"hollow": ["Windworn Hollow", "A Loomwright dungeon"],
+	"shrine": ["Hearthroot Shrine", "A Loomwright shrine"],
 }
 
 var world: World
@@ -86,6 +134,8 @@ var player: Player
 var hud: Hud
 var audio: Audio
 var bryn: Npc
+var wren: Npc
+var npcs: Array = []
 var camera: Camera3D
 var enemies: Array = []
 var slots: Array = []
@@ -112,6 +162,14 @@ var _gust_warned := false
 var _vent_fx := {}
 var _vent_t := 0.0
 var _deny_warned := false
+var _shrine_plates: Array = []
+var _gate1_open := false
+var _gate2_open := false
+var _shrine_node := false
+var _crates: Array = []
+var _bridge_t := 0.0
+var _wren_moved := false
+var _heavy_hint := false
 
 var _beacon: MeshInstance3D
 var _beacon_mat: StandardMaterial3D
@@ -137,6 +195,9 @@ func _ready() -> void:
 	_add_water()
 	_plate_state.resize(world.hollow["plates"].size())
 	_plate_state.fill(false)
+	_shrine_plates.resize(world.shrine["plates"].size())
+	_shrine_plates.fill(false)
+	_crates = world.shrine["crates"].duplicate()
 
 	camera = Camera3D.new()
 	camera.fov = 72.0
@@ -157,6 +218,17 @@ func _ready() -> void:
 	bryn.pos = Vector3(World.CAMP_X + 2.5, 0, World.CAMP_Z + 1.5)
 	bryn.pos.y = world.surface_y(bryn.pos.x, bryn.pos.z)
 	bryn.rotation.y = -PI / 2.0
+	npcs.append(bryn)
+
+	wren = Npc.new()
+	wren.look = "wren"
+	wren.display_name = "Wren"
+	add_child(wren)
+	wren.pos = world.ford["wren"]
+	wren.pos.y = world.surface_y(wren.pos.x, wren.pos.z)
+	wren.rotation.y = -PI / 2.0
+	wren.world = world
+	npcs.append(wren)
 
 	hud = Hud.new()
 	hud.audio = audio
@@ -179,7 +251,7 @@ func _ready() -> void:
 		enemies.append(e)
 
 	slots.resize(9)
-	hud.set_hearts(player.hp)
+	hud.set_hearts(player.hp, player.max_hp)
 	_render_quest()
 	_render_hotbar()
 	player.animate(0.0)
@@ -372,13 +444,28 @@ func _known_recipes() -> Array:
 	return out
 
 
+## True when a block of this kind is within a few steps of the hero.
+func near_block(b: int, radius := 4) -> bool:
+	var c := Vector3i(floori(player.pos.x), floori(player.pos.y), floori(player.pos.z))
+	for y in range(c.y - 2, c.y + 3):
+		for z in range(c.z - radius, c.z + radius + 1):
+			for x in range(c.x - radius, c.x + radius + 1):
+				if world.get_b(x, y, z) == b:
+					return true
+	return false
+
+
 func _recipe_rows() -> Array:
 	var rows := []
+	var bench := near_block(World.WORKBENCH)
 	for r in _known_recipes():
 		var out: String = r["out"]
 		var owned: bool = r.get("once", false) and count(out) > 0
 		var ok := not owned
 		var parts := PackedStringArray()
+		if r.get("station", "") == "workbench" and not bench:
+			ok = false
+			parts.append("[color=#e8564a]Needs a workbench nearby[/color]")
 		for k in r["need"]:
 			var need: int = r["need"][k]
 			var have := count(k)
@@ -389,7 +476,7 @@ func _recipe_rows() -> Array:
 		var n: int = r["n"]
 		rows.append({
 			"name": ("%d " % n if n > 1 else "") + str(items[out]["name"]),
-			"need": "Already crafted" if owned else " + ".join(parts),
+			"need": "Already crafted" if owned else " + ".join(parts).replace("nearby[/color] + ", "nearby[/color]   "),
 			"ok": ok,
 			"color": items[out]["color"],
 		})
@@ -414,30 +501,70 @@ func _craft(i: int) -> void:
 
 # ---------------------------------------------------------------- quest
 
+func quest_done(q: Dictionary) -> bool:
+	var steps: Array = q["steps"]
+	return done.has(steps[-1]["id"])
+
+
 func _render_quest() -> void:
+	var q: Dictionary = quests[tracked]
 	var steps := []
-	for q in quest:
-		steps.append({"text": q["text"], "done": done.has(q["id"])})
+	for g in q["steps"]:
+		steps.append({"text": g["text"], "done": done.has(g["id"])})
 	var extra := []
 	for g in side:
 		if g.has("needs") and not done.has(g["needs"]):
 			continue
-		extra.append({"text": g["text"], "done": done.has(g["id"])})
-	hud.set_quest(QUEST_TITLE, steps, extra)
+		var text: String = g["text"]
+		if g["id"] == "caches":
+			text = "Find the lost caches (%d/%d)" % [caches_found, CACHE_COUNT]
+		extra.append({"text": text, "done": done.has(g["id"])})
+	var others := 0
+	for i in quests.size():
+		if i != tracked and not quest_done(quests[i]):
+			others += 1
+	var footer := "Q  Switch quest (%d more)" % others if others > 0 else ""
+	hud.set_quest(q["title"], steps, extra, footer)
+
+
+## Q cycles the tracked quest through the ones not finished yet.
+func cycle_quest() -> void:
+	for k in range(1, quests.size() + 1):
+		var i := (tracked + k) % quests.size()
+		if not quest_done(quests[i]):
+			tracked = i
+			break
+	_render_quest()
+	audio.play("ui_click", -6.0, 0.0)
 
 
 func complete(id: String) -> void:
 	if done.has(id):
 		return
 	done[id] = true
-	_render_quest()
-	for g in quest + side:
+	var finished := ""
+	for i in quests.size():
+		var steps: Array = quests[i]["steps"]
+		for g in steps:
+			if g["id"] == id:
+				toast("Quest: " + str(g["text"]))
+				if g == steps[-1]:
+					finished = quests[i]["title"]
+				elif not quest_done(quests[i]):
+					tracked = i
+	for g in side:
 		if g["id"] == id:
-			toast(("Quest: " if quest.has(g) else "Done: ") + str(g["text"]))
-	if id == "return":
+			toast("Done: " + (str(g["text"]) if id != "caches" else "Found every lost cache"))
+	if quest_done(quests[tracked]):
+		for i in quests.size():
+			if not quest_done(quests[i]):
+				tracked = i
+				break
+	_render_quest()
+	if finished != "":
 		audio.play("quest", -2.0, 0.0)
-		hud.show_banner("Quest complete", QUEST_TITLE)
-	elif id != "vent_recipe":
+		hud.show_banner("Quest complete", finished)
+	elif id != "vent_recipe" and id != "wren_recipes":
 		audio.play("goal", -4.0, 0.0)
 
 
@@ -494,6 +621,8 @@ func _talk_to_bryn() -> void:
 	elif done.has("return"):
 		_say("Bryn", [
 			"Set a vent at the foot of a cliff and glide over it. Skyglass grows in pale blue clusters across the Steppes.",
+			"The Loomwrights hid caches all over the land, too. The riddles are on the tablet by the fire.",
+			"And there is a shrine in the hills across the river, south-east of here. Loomstone inside, so bring something to build with.",
 		])
 	elif not done.has("glider"):
 		_say("Bryn", [
@@ -504,6 +633,58 @@ func _talk_to_bryn() -> void:
 			"The great mesa is the biggest one in the Steppes. Its Loomstone doorway faces west, toward us.",
 			"And mind the gusts up there. You'll hear a whistle just before one hits.",
 		])
+
+
+func _talk_to_wren() -> void:
+	if wren.walking():
+		_say("Wren", ["Coming, coming! Carts are slow, and so am I."])
+	elif not done.has("wren_talk"):
+		_say("Wren", [
+			"Oh! Hello there! I'm Wren. I build things: gliders, gadgets, anything with a spring in it.",
+			"My cart's stuck on this side of the river. The old ford washed out, and carts don't swim.",
+			"Bryn's camp is just over there, and I'd love to set up shop by the fire. Could you build me a bridge?",
+			"Anything from my flag post to the one across the water. Planks, stone, even dirt. It just has to be dry, with no step taller than one block.",
+		], func() -> void: complete("wren_talk"))
+	elif not done.has("bridge"):
+		_say("Wren", [
+			"From my red flag to the other one. Keep it above the water and no steps taller than one block, or the cart tips over.",
+		])
+	elif not done.has("wren_return"):
+		_say("Wren", [
+			"You did it! And it holds! Look at that.",
+			"Here's my thanks: ladders and spring pads. Craft them at a workbench. Ladders cost no stamina, and they cling to anything, even Loomstone.",
+			"A spring pad flings you into the sky, so open your glider at the top. I'll set up a workbench by Bryn's fire.",
+		], _reward_wren)
+	elif not done.has("shrine_chest"):
+		_say("Wren", [
+			"Stand near a workbench and press C. Four planks make one, if you want your own.",
+			"Bryn says the shrine in the hills keeps its treasure on a ledge nobody can climb. Sounds like a job for a ladder!",
+		])
+	else:
+		_say("Wren", [
+			"A spring pad next to an updraft vent... now that's a launch. Try it!",
+		])
+
+
+func _reward_wren() -> void:
+	complete("wren_return")
+	complete("wren_recipes")
+	add_item("ladder", 4)
+	add_item("spring", 1)
+	toast("Learned recipes: Ladder, Spring Pad")
+	var h: int = world.spots["camp_h"]
+	var bench := Vector3i(World.CAMP_X + 6, h + 1, World.CAMP_Z - 3)
+	world.set_block(bench.x, bench.y, bench.z, World.WORKBENCH)
+	if not _wren_moved:
+		_wren_moved = true
+		var route := world.ford_route()
+		var pts: Array = []
+		for i in range(route.size() - 1, -1, -1):
+			var c: Vector3i = route[i]
+			pts.append(Vector3(c.x + 0.5, c.y + 1.0, c.z + 0.5))
+		pts.append(Vector3(bench.x + 0.5, -1.0, bench.z + 2.0))
+		wren.walk(pts)
+	_render_quest()
 
 
 func _reward() -> void:
@@ -522,7 +703,7 @@ func hurt_player(amount: int, from) -> void:
 	player.hp -= amount
 	player.invuln = 0.7
 	player.regen_t = 0.0
-	hud.set_hearts(player.hp)
+	hud.set_hearts(player.hp, player.max_hp)
 	hud.flash_hurt()
 	audio.play("hurt", -3.0)
 	if from != null:
@@ -544,14 +725,14 @@ func hurt_player(amount: int, from) -> void:
 
 func _respawn() -> void:
 	player.dead = false
-	player.hp = 10
-	player.stamina = 100.0
+	player.hp = player.max_hp
+	player.stamina = player.max_stamina
 	player.exhausted = false
 	player.stop_glide()
 	player.mode = "walk"
 	player.pos = world.spawn
 	player.vel = Vector3.ZERO
-	hud.set_hearts(player.hp)
+	hud.set_hearts(player.hp, player.max_hp)
 	_resume()
 
 
@@ -638,6 +819,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		elif code == KEY_SPACE:
 			jump_pressed = true
+		elif code == KEY_Q:
+			cycle_quest()
 		elif code == KEY_V:
 			player.first_person = not player.first_person
 			toast("First person" if player.first_person else "Third person")
@@ -647,9 +830,11 @@ func _unhandled_input(event: InputEvent) -> void:
 
 ## What F would do right now: {"text": prompt, "do": Callable} or {}.
 func _interaction() -> Dictionary:
-	var to_b := bryn.pos - player.pos
-	if to_b.length() < 3.2:
-		return {"text": "F  Talk to Bryn", "do": _talk_to_bryn}
+	for n in npcs:
+		var npc: Npc = n
+		if (npc.pos - player.pos).length() < 3.2:
+			var f: Callable = _talk_to_bryn if npc == bryn else _talk_to_wren
+			return {"text": "F  Talk to " + npc.display_name, "do": f}
 	var tg := _current_target()
 	if not tg.has("block"):
 		return {}
@@ -657,11 +842,28 @@ func _interaction() -> Dictionary:
 	var bp: Vector3i = hit["pos"]
 	var b: int = hit["b"]
 	if b == World.TABLET:
-		var i: int = world.hollow["tablets"].find(bp)
-		return {"text": "F  Read the tablet", "do": func() -> void: _say("Loomwright tablet", [TABLET_TEXT[maxi(i, 0)]])}
+		var key: String = world.tablets.get(bp, "hollow_0")
+		var text := "F  Read the tablet"
+		if key == "riddles":
+			text = "F  Read the riddle tablet"
+		return {"text": text, "do": func() -> void: _read_tablet(key)}
 	if b == World.NODE:
-		return {"text": "F  Restore the Thread Node", "do": _restore_node}
+		var which: String = world.nodes.get(bp, "hollow")
+		return {"text": "F  Restore the Thread Node", "do": _restore_node if which == "hollow" else _restore_shrine_node}
+	if b == World.CHEST:
+		return {"text": "F  Open the chest", "do": func() -> void: _open_chest(bp)}
+	if b == World.CRATE:
+		return {"text": "F  Push the crate", "do": func() -> void: _push_crate(bp)}
 	return {}
+
+
+func _read_tablet(key: String) -> void:
+	var lines: Array = TABLETS.get(key, TABLETS["hollow_0"])
+	_say("Loomwright tablet", lines)
+	if key == "shrine_1" and not _gate1_open:
+		_reset_crates([0])
+	elif key == "shrine_reset" and not _gate2_open:
+		_reset_crates([1, 2])
 
 
 func _interact() -> void:
@@ -683,6 +885,8 @@ func _process(delta: float) -> void:
 			e.update(dt, world, player, self)
 		_update_interaction(dt)
 		_update_hollow()
+		_update_shrine()
+		_update_bridge(dt)
 		var it := _interaction()
 		hud.set_prompt(it.get("text", ""))
 	else:
@@ -691,12 +895,13 @@ func _process(delta: float) -> void:
 		player.update_camera(0.0)
 		hud.set_prompt("")
 	jump_pressed = false
-	bryn.update(dt, player.pos)
+	for n in npcs:
+		n.update(dt, player.pos)
 	world.flush_dirty()
 	_update_region(dt)
 	_update_vents(dt)
 
-	var st := player.stamina / 100.0
+	var st := player.stamina / player.max_stamina
 	hud.set_stamina(st, player.exhausted or st < 0.25)
 	var state := "On foot"
 	match player.mode:
@@ -731,7 +936,7 @@ func _update_region(dt: float) -> void:
 		return
 	region = r
 	audio.play_music(r)
-	audio.play_ambience({"hearthvale": "meadow", "steppes": "steppes", "hollow": "hollow"}[r])
+	audio.play_ambience({"hearthvale": "meadow", "steppes": "steppes", "hollow": "hollow", "shrine": "hollow"}[r])
 	if not started:
 		return
 	if not _seen_regions.has(r):
@@ -741,6 +946,8 @@ func _update_region(dt: float) -> void:
 		complete("steppes")
 	elif r == "hollow":
 		complete("hollow")
+	elif r == "shrine":
+		complete("shrine_find")
 
 
 ## Gusts sweep across the Steppes every so often, with a whistle first.
@@ -797,6 +1004,181 @@ func _standing_on(p: Vector3i) -> bool:
 	return player.grounded and absf(q.y - (p.y + 1)) < 0.15 \
 		and q.x + player.hw > p.x and q.x - player.hw < p.x + 1 \
 		and q.z + player.hw > p.z and q.z - player.hw < p.z + 1
+
+
+## True when something (a crate, a block or the hero) weighs down a plate.
+func _plate_pressed(p: Vector3i) -> bool:
+	return world.get_b(p.x, p.y + 1, p.z) != World.AIR or _standing_on(p)
+
+
+## The Hearthroot Shrine: one crate opens the first gate, two crates the
+## second. Its plates are heavy: only a crate or a block weighs them down.
+func _update_shrine() -> void:
+	if region != "shrine" or _gate2_open:
+		return
+	var plates: Array = world.shrine["plates"]
+	for i in plates.size():
+		var p: Vector3i = plates[i]
+		var on := world.get_b(p.x, p.y + 1, p.z) != World.AIR
+		if not on and _standing_on(p) and not _heavy_hint:
+			_heavy_hint = true
+			toast("The plate barely moves. It needs something heavier than you")
+		if on != _shrine_plates[i]:
+			_shrine_plates[i] = on
+			world.set_block(p.x, p.y, p.z, World.PLATE_ON if on else World.PLATE)
+			audio.play_at("plate_on" if on else "plate_off", Vector3(p) + Vector3(0.5, 1, 0.5))
+	if not _gate1_open and _shrine_plates[0]:
+		_gate1_open = true
+		_open_box(world.shrine["gate1"])
+		complete("gate1")
+		toast("The first gate grinds open")
+	if _gate1_open and not _gate2_open and _shrine_plates[1] and _shrine_plates[2]:
+		_gate2_open = true
+		_open_box(world.shrine["gate2"])
+		complete("gate2")
+		toast("The second gate grinds open")
+
+
+## Clears a box of blocks [from, to] with the door sound.
+func _open_box(box: Array) -> void:
+	var a: Vector3i = box[0]
+	var b: Vector3i = box[1]
+	for y in range(a.y, b.y + 1):
+		for z in range(a.z, b.z + 1):
+			for x in range(a.x, b.x + 1):
+				world.set_block(x, y, z, World.AIR)
+	audio.play_at("door", (Vector3(a) + Vector3(b)) / 2.0 + Vector3(0.5, 0.5, 0.5), 2.0, 0.0)
+
+
+## Pushes a crate one block away from the hero, if the way is clear.
+func _push_crate(bp: Vector3i) -> void:
+	var to := Vector3(bp) + Vector3(0.5, 0, 0.5) - player.pos
+	to.y = 0.0
+	if absf(player.pos.y - bp.y) > 0.6 or to.length() > 2.4:
+		toast("Stand right behind the crate to push it")
+		return
+	var d := Vector3i(int(signf(to.x)), 0, 0) if absf(to.x) > absf(to.z) else Vector3i(0, 0, int(signf(to.z)))
+	var t := bp + d
+	var clear := world.get_b(t.x, t.y, t.z) == World.AIR and world.get_b(t.x, t.y - 1, t.z) != World.AIR
+	for e in enemies:
+		if e.alive and Vector3i(floori(e.pos.x), floori(e.pos.y), floori(e.pos.z)) == t:
+			clear = false
+	if not clear:
+		audio.play("deny", -6.0)
+		toast("Something blocks the crate")
+		return
+	world.set_block(bp.x, bp.y, bp.z, World.AIR)
+	world.set_block(t.x, t.y, t.z, World.CRATE)
+	var i := _crates.find(bp)
+	if i >= 0:
+		_crates[i] = t
+	player.swing_t = 0.25
+	audio.play_at("crate_push", Vector3(t) + Vector3(0.5, 0.5, 0.5), 0.0, 0.1)
+
+
+## Sends the shrine crates with these indexes back to where they started.
+func _reset_crates(which: Array) -> void:
+	var moved := false
+	for i in which:
+		var start: Vector3i = world.shrine["crates"][i]
+		var cur: Vector3i = _crates[i]
+		if cur == start:
+			continue
+		if world.get_b(start.x, start.y, start.z) != World.AIR and world.get_b(start.x, start.y, start.z) != World.CRATE:
+			world.set_block(start.x, start.y, start.z, World.AIR)
+		if world.get_b(cur.x, cur.y, cur.z) == World.CRATE:
+			world.set_block(cur.x, cur.y, cur.z, World.AIR)
+		world.set_block(start.x, start.y, start.z, World.CRATE)
+		_crates[i] = start
+		moved = true
+	if moved:
+		audio.play("crate_push", -2.0, 0.0)
+		toast("The crates slide back to where they started")
+
+
+func _restore_shrine_node() -> void:
+	if _shrine_node:
+		return
+	_shrine_node = true
+	var n: Vector3i = world.shrine["node"]
+	world.set_block(n.x, n.y, n.z, World.NODE_ON)
+	_open_box(world.shrine["veil"])
+	audio.play("node", 0.0, 0.0)
+	complete("shrine_node")
+	hud.show_banner("The roots stir", "Thread Node restored")
+	toast("A niche has opened at the end of the ledge")
+
+
+## What is inside each chest: items, and sometimes an upgrade.
+const CHESTS := {
+	"shrine": {"upgrade": "stamina"},
+	"isle": {"upgrade": "wings", "items": {"skyglass": 2}},
+	"cave": {"upgrade": "heart", "items": {"stone": 4}},
+	"mesa": {"items": {"skyglass": 4, "vent": 1}},
+	"far_mesa": {"items": {"bricks": 8, "lantern": 3, "spring": 1}},
+	"beach": {"items": {"log": 6, "skyglass": 2}},
+}
+
+
+func _open_chest(bp: Vector3i) -> void:
+	var key: String = world.chests.get(bp, "")
+	if world.get_b(bp.x, bp.y, bp.z) != World.CHEST:
+		return
+	world.set_block(bp.x, bp.y, bp.z, World.CHEST_OPEN)
+	audio.play_at("chest_open", Vector3(bp) + Vector3(0.5, 0.5, 0.5), 0.0, 0.0)
+	var loot: Dictionary = CHESTS.get(key, {})
+	var got := PackedStringArray()
+	var items_in: Dictionary = loot.get("items", {})
+	for id in items_in:
+		add_item(id, items_in[id])
+		got.append("%d %s" % [items_in[id], items[id]["name"]])
+	match loot.get("upgrade", ""):
+		"stamina":
+			player.max_stamina += 25.0
+			player.stamina = player.max_stamina
+			hud.show_banner("Stamina Vessel", "You can climb and glide for longer")
+		"heart":
+			player.max_hp += 2
+			player.hp = player.max_hp
+			hud.set_hearts(player.hp, player.max_hp)
+			hud.show_banner("Heart Vessel", "One more heart")
+		"wings":
+			player.set_wings()
+			hud.show_banner("Gale Wings", "Your glider flies faster and further")
+	if not got.is_empty():
+		toast("Found " + ", ".join(got))
+	if key == "shrine":
+		complete("shrine_chest")
+	elif key != "":
+		caches_found += 1
+		toast("Lost cache %d of %d" % [caches_found, CACHE_COUNT])
+		if caches_found >= CACHE_COUNT:
+			complete("caches")
+		else:
+			audio.play("goal", -4.0, 0.0)
+		_render_quest()
+
+
+## Watches Wren's crossing once you've agreed to build the bridge.
+func _update_bridge(dt: float) -> void:
+	if not done.has("wren_talk") or done.has("bridge"):
+		return
+	_bridge_t -= dt
+	if _bridge_t > 0.0:
+		return
+	_bridge_t = 0.75
+	var a: Vector2i = world.ford["a"]
+	if Vector2(player.pos.x - a.x, player.pos.z - a.y).length() > 40.0:
+		return
+	if not world.ford_route().is_empty():
+		complete("bridge")
+		toast("Wren: It looks sturdy! Come and tell me.")
+
+
+## Called by the hero when a spring pad launches them.
+func on_spring(at: Vector3) -> void:
+	audio.play_at("spring", at, 0.0, 0.05)
+	complete("spring")
 
 
 func _restore_node() -> void:
@@ -1010,7 +1392,7 @@ func _update_interaction(dt: float) -> void:
 			var it := sel_item()
 			var has_pick := not it.is_empty() and it.has("pick")
 			var time: float = break_time.get(b, 0.6)
-			if b == World.STONE and has_pick:
+			if (b == World.STONE or b == World.BRICKS) and has_pick:
 				time = 0.6
 			_break_progress += dt / time
 			if player.swing_t <= 0.0:
