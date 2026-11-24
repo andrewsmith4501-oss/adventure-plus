@@ -1,0 +1,854 @@
+<title>Adventure Plus Prototype</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Signika:wght@400;600;700&display=swap">
+<style>
+/* Layout: full-screen 3D canvas with a game HUD floating on top. Single deliberate dark look. */
+:root {
+  --ink: #f4efe3;
+  --ink-dim: #c9c2b0;
+  --panel: rgba(22, 28, 24, 0.82);
+  --panel-edge: rgba(244, 239, 227, 0.18);
+  --accent: #f2b84b;
+  --stamina: #7bd66a;
+  --danger: #e8564a;
+  --sky: #9fd4ff;
+  --font: "Signika", "Trebuchet MS", system-ui, sans-serif;
+  color-scheme: dark;
+}
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; overflow: hidden; background: #0f1411; color: var(--ink); font-family: var(--font); }
+#game { position: fixed; inset: 0; display: block; width: 100%; height: 100%; }
+.hud { position: fixed; inset: 0; pointer-events: none; user-select: none; }
+#crosshair { position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; transform: translate(-50%, -50%); }
+#crosshair::before, #crosshair::after { content: ""; position: absolute; background: rgba(255,255,255,0.85); box-shadow: 0 0 2px #000; }
+#crosshair::before { left: 8px; top: 0; width: 2px; height: 18px; }
+#crosshair::after { top: 8px; left: 0; height: 2px; width: 18px; }
+#stamina { position: absolute; left: calc(50% + 46px); top: calc(50% - 30px); width: 44px; height: 44px; transition: opacity .4s; }
+#stamina circle { fill: none; stroke-width: 6; }
+#stamina .bg { stroke: rgba(0,0,0,0.35); }
+#stamina .fg { stroke: var(--stamina); stroke-linecap: round; transform: rotate(-90deg); transform-origin: 50% 50%; }
+#stamina.tired .fg { stroke: var(--danger); }
+#hearts { position: absolute; left: max(16px, env(safe-area-inset-left, 0px)); top: calc(14px + env(safe-area-inset-top, 0px)); font-size: 28px; letter-spacing: 2px; text-shadow: 0 2px 3px rgba(0,0,0,.6); }
+#hearts .full { color: #ff5a5a; } #hearts .half { color: #ffaaa0; } #hearts .empty { color: rgba(255,255,255,0.25); }
+#goals { position: absolute; left: max(16px, env(safe-area-inset-left, 0px)); top: calc(56px + env(safe-area-inset-top, 0px)); background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 8px; padding: 10px 14px; font-size: 14px; line-height: 1.55; max-width: 260px; }
+#goals h3 { margin: 0 0 4px; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); }
+#goals .done { color: var(--ink-dim); text-decoration: line-through; }
+#goals li { list-style: none; } #goals ul { margin: 0; padding: 0; }
+#hotbar { position: absolute; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); display: flex; gap: 6px; }
+.slot { width: 52px; height: 52px; border-radius: 8px; background: var(--panel); border: 2px solid var(--panel-edge); position: relative; display: grid; place-items: center; }
+.slot.sel { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(242,184,75,.35); }
+.slot .icon { width: 28px; height: 28px; border-radius: 4px; box-shadow: inset 0 -5px 0 rgba(0,0,0,.25); }
+.slot .count { position: absolute; right: 4px; bottom: 2px; font-size: 13px; font-weight: 700; text-shadow: 0 1px 2px #000; font-variant-numeric: tabular-nums; }
+.slot .key { position: absolute; left: 4px; top: 1px; font-size: 10px; color: var(--ink-dim); }
+#itemname { position: absolute; left: 50%; bottom: calc(80px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); font-weight: 600; text-shadow: 0 1px 3px #000; transition: opacity .5s; }
+#toasts { position: absolute; left: 50%; top: 22%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; align-items: center; }
+.toast { background: var(--panel); border: 1px solid var(--panel-edge); padding: 6px 14px; border-radius: 999px; font-size: 15px; transition: opacity .6s; }
+#hurt { position: absolute; inset: 0; box-shadow: inset 0 0 120px rgba(232,86,74,0.9); opacity: 0; transition: opacity .3s; }
+#state { position: absolute; right: max(16px, env(safe-area-inset-right, 0px)); top: calc(16px + env(safe-area-inset-top, 0px)); background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 999px; padding: 4px 12px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+.overlay { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(10,14,12,0.6); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.card { background: #18201b; border: 1px solid var(--panel-edge); border-radius: 12px; padding: 22px 26px; max-width: 560px; width: 100%; box-sizing: border-box; max-height: 90vh; overflow: auto; }
+.card h1 { margin: 0 0 4px; font-size: 30px; letter-spacing: .02em; text-wrap: balance; }
+.card h1 span { color: var(--accent); }
+.card p { color: var(--ink-dim); margin: 6px 0 14px; line-height: 1.45; }
+.keys { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 14px; margin-bottom: 16px; }
+.keys b { color: var(--accent); font-weight: 600; white-space: nowrap; }
+button { font: inherit; font-weight: 600; background: var(--accent); color: #1d1608; border: 0; border-radius: 8px; padding: 10px 18px; cursor: pointer; }
+button:disabled { background: #3a423c; color: #8b9289; cursor: not-allowed; }
+button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.recipe { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--panel-edge); }
+.recipe .info { flex: 1; min-width: 0; }
+.recipe .name { font-weight: 600; }
+.recipe .need { font-size: 13px; color: var(--ink-dim); }
+.recipe .need .miss { color: var(--danger); }
+.recipe .sw { width: 26px; height: 26px; border-radius: 4px; flex: none; }
+.note { font-size: 12px; color: var(--ink-dim); margin-top: 12px; }
+@media (max-width: 600px) { #goals { display: none; } .slot { width: 36px; height: 36px; } .slot .icon { width: 20px; height: 20px; } }
+</style>
+
+<canvas id="game"></canvas>
+<div class="hud" id="hud">
+  <div id="crosshair"></div>
+  <svg id="stamina" viewBox="0 0 44 44"><circle class="bg" cx="22" cy="22" r="17"></circle><circle class="fg" id="stamFg" cx="22" cy="22" r="17"></circle></svg>
+  <div id="hearts"></div>
+  <div id="goals"><h3>Island goals</h3><ul id="goalList"></ul></div>
+  <div id="state"></div>
+  <div id="itemname"></div>
+  <div id="hotbar"></div>
+  <div id="toasts"></div>
+  <div id="hurt"></div>
+</div>
+
+<div class="overlay" id="startScreen">
+  <div class="card">
+    <h1>Adventure <span>Plus</span></h1>
+    <p>Prototype island. Gather blocks, craft a glider, climb the cliff to the glowing Sky Shard, and watch out for Thornlings.</p>
+    <div class="keys">
+      <b>Mouse</b><span>Look around</span>
+      <b>W A S D</b><span>Move. Walk into a tall wall to climb it</span>
+      <b>Space</b><span>Jump. In the air: open or close the glider. On a wall: leap up</span>
+      <b>Shift</b><span>Sprint. On a wall or glider: let go</span>
+      <b>Left click</b><span>Hold to break a block, click to attack</span>
+      <b>Right click</b><span>Place the selected block</span>
+      <b>1 to 9, wheel</b><span>Choose a hotbar slot</span>
+      <b>C</b><span>Open crafting</span>
+      <b>V</b><span>Switch between third and first person</span>
+    </div>
+    <button id="playBtn">Click to play</button>
+    <div class="note">Needs a keyboard and mouse. Press Esc any time to pause.</div>
+  </div>
+</div>
+
+<div class="overlay" id="craftScreen" hidden>
+  <div class="card">
+    <h1>Crafting</h1>
+    <p>Recipes use what is in your hotbar.</p>
+    <div id="recipes"></div>
+    <div style="margin-top:14px"><button id="closeCraft">Back to the island</button></div>
+  </div>
+</div>
+
+<div class="overlay" id="deadScreen" hidden>
+  <div class="card"><h1>Knocked out</h1><p>You wake up back at the beach. Your items are safe.</p><button id="respawnBtn">Get up</button></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(() => {
+'use strict';
+// ---------- World constants ----------
+const W = 96, D = 96, H = 48, CH = 16, WATER = 7, WATER_SURF = WATER + 0.8;
+const AIR = 0, GRASS = 1, DIRT = 2, STONE = 3, SAND = 4, LOG = 5, LEAVES = 6, PLANKS = 7, CRYSTAL = 9;
+const world = new Uint8Array(W * D * H);
+const idx = (x, y, z) => x + z * W + y * W * D;
+function getB(x, y, z) {
+  if (y < 0) return STONE;
+  if (x < 0 || z < 0 || x >= W || z >= D || y >= H) return AIR;
+  return world[idx(x, y, z)];
+}
+const solidAt = (x, y, z) => getB(Math.floor(x), Math.floor(y), Math.floor(z)) !== AIR;
+
+// ---------- Seeded noise ----------
+let seed = 1337;
+const rng = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+const hash2 = (x, z) => { let h = (x * 374761393 + z * 668265263) | 0; h = (h ^ (h >>> 13)) * 1274126177 | 0; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+const hash3 = (x, y, z) => hash2(x * 31 + y * 977, z * 17 - y * 131);
+const sm = t => t * t * (3 - 2 * t);
+function vnoise(x, z) {
+  const xi = Math.floor(x), zi = Math.floor(z), xf = sm(x - xi), zf = sm(z - zi);
+  const a = hash2(xi, zi), b = hash2(xi + 1, zi), c = hash2(xi, zi + 1), d = hash2(xi + 1, zi + 1);
+  return a + (b - a) * xf + (c - a) * zf + (a - b - c + d) * xf * zf;
+}
+const fbm = (x, z) => (vnoise(x, z) * 0.55 + vnoise(x * 2.1, z * 2.1) * 0.3 + vnoise(x * 4.3, z * 4.3) * 0.15);
+const smoothstep = (a, b, v) => { const t = Math.min(1, Math.max(0, (v - a) / (b - a))); return sm(t); };
+
+// ---------- Terrain ----------
+const MESA = { x: 64, z: 34 };
+function heightAt(x, z) {
+  const cx = x - W / 2, cz = z - D / 2;
+  const d = Math.sqrt(cx * cx + cz * cz) / (W * 0.47) + (fbm(x * 0.05 + 9, z * 0.05) - 0.5) * 0.25;
+  const mask = 1 - smoothstep(0.55, 1.0, d);
+  let h = 3 + mask * (5 + fbm(x * 0.055, z * 0.055) * 10);
+  const mx = x - MESA.x, mz = z - MESA.z;
+  const md = Math.sqrt(mx * mx + mz * mz) + (fbm(x * 0.25, z * 0.25) - 0.5) * 3.5;
+  if (md < 8) h = Math.max(h, 31 + fbm(x * 0.15, z * 0.15) * 2.5);
+  else if (md < 12) h = Math.max(h, h + (12 - md) * 1.2);
+  return Math.min(H - 8, Math.floor(h));
+}
+const heights = new Int16Array(W * D);
+for (let z = 0; z < D; z++) for (let x = 0; x < W; x++) {
+  const h = heightAt(x, z); heights[x + z * W] = h;
+  const rocky = fbm(x * 0.12 + 50, z * 0.12) > 0.7 && h > WATER + 2;
+  for (let y = 0; y <= h; y++) {
+    let b;
+    if (y === h) b = h <= WATER + 1 ? SAND : (rocky ? STONE : GRASS);
+    else if (y > h - 3) b = h <= WATER + 1 ? SAND : DIRT;
+    else b = STONE;
+    world[idx(x, y, z)] = b;
+  }
+}
+const setRaw = (x, y, z, b) => { if (x >= 0 && z >= 0 && x < W && z < D && y >= 0 && y < H) world[idx(x, y, z)] = b; };
+const SPAWN = { x: 34.5, z: 58.5 };
+// trees
+for (let i = 0; i < 90; i++) {
+  const x = 4 + Math.floor(rng() * (W - 8)), z = 4 + Math.floor(rng() * (D - 8));
+  const h = heights[x + z * W];
+  if (getB(x, h, z) !== GRASS || h > 22) continue;
+  if (Math.hypot(x - SPAWN.x, z - SPAWN.z) < 4) continue;
+  const th = 4 + Math.floor(rng() * 2);
+  for (let y = 1; y <= th; y++) setRaw(x, h + y, z, LOG);
+  const top = h + th;
+  for (let dy = -2; dy <= 1; dy++) {
+    const r = dy >= 0 ? 1 : 2;
+    for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) {
+      if (Math.abs(dx) === r && Math.abs(dz) === r && rng() < 0.6) continue;
+      if (getB(x + dx, top + dy, z + dz) === AIR) setRaw(x + dx, top + dy, z + dz, LEAVES);
+    }
+  }
+  setRaw(x, top + 1, z, LEAVES);
+}
+// Sky Shard on top of the mesa, on a little plinth
+const mesaTop = heights[MESA.x + MESA.z * W];
+setRaw(MESA.x, mesaTop + 1, MESA.z, STONE);
+setRaw(MESA.x, mesaTop + 2, MESA.z, CRYSTAL);
+const spawnY = () => { let y = H - 1; while (y > 0 && getB(Math.floor(SPAWN.x), y - 1, Math.floor(SPAWN.z)) === AIR) y--; return y + 0.01; };
+
+// ---------- Rendering setup ----------
+const canvas = document.getElementById('game');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+const scene = new THREE.Scene();
+const SKY = 0x9fd4ff;
+scene.background = new THREE.Color(SKY);
+scene.fog = new THREE.Fog(SKY, 45, 120);
+const camera = new THREE.PerspectiveCamera(72, 1, 0.05, 400);
+scene.add(camera);
+scene.add(new THREE.HemisphereLight(0xdfefff, 0x4a5a3a, 0.85));
+const sun = new THREE.DirectionalLight(0xffffff, 0.6); sun.position.set(0.5, 1, 0.3); scene.add(sun);
+function resize() { const w = window.innerWidth, h = window.innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+window.addEventListener('resize', resize); resize();
+
+// water and sea floor
+const water = new THREE.Mesh(new THREE.PlaneGeometry(600, 600), new THREE.MeshBasicMaterial({ color: 0x3d8fc9, transparent: true, opacity: 0.72, depthWrite: false }));
+water.rotation.x = -Math.PI / 2; water.position.set(W / 2, WATER_SURF, D / 2); water.renderOrder = 2; scene.add(water);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(600, 600), new THREE.MeshBasicMaterial({ color: 0xbfae7a }));
+floor.rotation.x = -Math.PI / 2; floor.position.set(W / 2, 3.98, D / 2); scene.add(floor);
+
+// ---------- Chunk meshing with ambient occlusion ----------
+const COLORS = {
+  [GRASS]: { top: [0.40, 0.72, 0.30], side: [0.45, 0.52, 0.27], bottom: [0.50, 0.36, 0.22] },
+  [DIRT]: { all: [0.52, 0.37, 0.23] },
+  [STONE]: { all: [0.52, 0.53, 0.56] },
+  [SAND]: { all: [0.87, 0.80, 0.56] },
+  [LOG]: { top: [0.66, 0.53, 0.33], side: [0.42, 0.29, 0.17], bottom: [0.66, 0.53, 0.33] },
+  [LEAVES]: { all: [0.24, 0.52, 0.22] },
+  [PLANKS]: { all: [0.78, 0.62, 0.38] },
+  [CRYSTAL]: { all: [0.45, 0.95, 1.0] },
+};
+const FACES = [
+  { n: [-1, 0, 0], c: [[0, 1, 0], [0, 0, 0], [0, 1, 1], [0, 0, 1]], shade: 0.78, kind: 'side' },
+  { n: [1, 0, 0], c: [[1, 1, 1], [1, 0, 1], [1, 1, 0], [1, 0, 0]], shade: 0.78, kind: 'side' },
+  { n: [0, -1, 0], c: [[1, 0, 1], [0, 0, 1], [1, 0, 0], [0, 0, 0]], shade: 0.5, kind: 'bottom' },
+  { n: [0, 1, 0], c: [[0, 1, 1], [1, 1, 1], [0, 1, 0], [1, 1, 0]], shade: 1.0, kind: 'top' },
+  { n: [0, 0, -1], c: [[1, 0, 0], [0, 0, 0], [1, 1, 0], [0, 1, 0]], shade: 0.66, kind: 'side' },
+  { n: [0, 0, 1], c: [[0, 0, 1], [1, 0, 1], [0, 1, 1], [1, 1, 1]], shade: 0.66, kind: 'side' },
+];
+const isOpaque = (x, y, z) => getB(x, y, z) !== AIR;
+const chunkMat = new THREE.MeshBasicMaterial({ vertexColors: true });
+const chunks = new Map();
+const dirty = new Set();
+function buildChunk(cx, cz) {
+  const pos = [], col = [], ind = [];
+  for (let y = 0; y < H; y++) for (let lz = 0; lz < CH; lz++) for (let lx = 0; lx < CH; lx++) {
+    const x = cx * CH + lx, z = cz * CH + lz;
+    const b = getB(x, y, z); if (b === AIR) continue;
+    const pal = COLORS[b];
+    const jitter = 0.94 + hash3(x, y, z) * 0.1;
+    for (const f of FACES) {
+      const nx = x + f.n[0], ny = y + f.n[1], nz = z + f.n[2];
+      if (isOpaque(nx, ny, nz)) continue;
+      const base = pal.all || pal[f.kind] || pal.side;
+      const axis = f.n[0] ? 0 : f.n[1] ? 1 : 2;
+      const t1 = (axis + 1) % 3, t2 = (axis + 2) % 3;
+      const start = pos.length / 3;
+      for (const c of f.c) {
+        pos.push(x + c[0], y + c[1], z + c[2]);
+        const o1 = [0, 0, 0], o2 = [0, 0, 0];
+        o1[t1] = c[t1] ? 1 : -1; o2[t2] = c[t2] ? 1 : -1;
+        const s1 = isOpaque(nx + o1[0], ny + o1[1], nz + o1[2]) ? 1 : 0;
+        const s2 = isOpaque(nx + o2[0], ny + o2[1], nz + o2[2]) ? 1 : 0;
+        const cc = isOpaque(nx + o1[0] + o2[0], ny + o1[1] + o2[1], nz + o1[2] + o2[2]) ? 1 : 0;
+        const ao = (s1 && s2) ? 0 : 3 - (s1 + s2 + cc);
+        const lit = (b === CRYSTAL ? 1.15 : f.shade * jitter) * (0.55 + ao * 0.15);
+        col.push(base[0] * lit, base[1] * lit, base[2] * lit);
+      }
+      ind.push(start, start + 1, start + 2, start + 2, start + 1, start + 3);
+    }
+  }
+  const key = cx + ',' + cz;
+  let mesh = chunks.get(key);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  geo.setIndex(ind);
+  geo.computeBoundingSphere();
+  if (mesh) { mesh.geometry.dispose(); mesh.geometry = geo; }
+  else { mesh = new THREE.Mesh(geo, chunkMat); chunks.set(key, mesh); scene.add(mesh); }
+}
+for (let cz = 0; cz < D / CH; cz++) for (let cx = 0; cx < W / CH; cx++) buildChunk(cx, cz);
+function setBlock(x, y, z, b) {
+  if (x < 0 || z < 0 || x >= W || z >= D || y < 0 || y >= H) return;
+  world[idx(x, y, z)] = b;
+  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+    const cx = Math.floor((x + dx) / CH), cz = Math.floor((z + dz) / CH);
+    if (cx >= 0 && cz >= 0 && cx < W / CH && cz < D / CH) dirty.add(cx + ',' + cz);
+  }
+}
+
+// Beacon over the Sky Shard so players have a destination
+const beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 60, 8, 1, true), new THREE.MeshBasicMaterial({ color: 0x8ff4ff, transparent: true, opacity: 0.28, depthWrite: false, fog: false }));
+beacon.position.set(MESA.x + 0.5, mesaTop + 33, MESA.z + 0.5); scene.add(beacon);
+
+// ---------- Items, inventory, crafting ----------
+const ITEMS = {
+  dirt: { name: 'Dirt', color: '#865e3b', block: DIRT },
+  stone: { name: 'Stone', color: '#868890', block: STONE },
+  sand: { name: 'Sand', color: '#ddcb8f', block: SAND },
+  log: { name: 'Log', color: '#6b4a2b', block: LOG },
+  leaves: { name: 'Leaves', color: '#3e8538', block: LEAVES },
+  planks: { name: 'Planks', color: '#c79e61', block: PLANKS },
+  stick: { name: 'Stick', color: '#a07a48' },
+  wsword: { name: 'Wooden Sword', color: '#d6b27a', damage: 2 },
+  ssword: { name: 'Stone Sword', color: '#a9adb6', damage: 3 },
+  spick: { name: 'Stone Pick', color: '#7f848c', pick: true },
+  glider: { name: 'Leaf Glider', color: '#5fbf4f' },
+  shard: { name: 'Sky Shard', color: '#79f0ff' },
+};
+const DROPS = { [GRASS]: 'dirt', [DIRT]: 'dirt', [STONE]: 'stone', [SAND]: 'sand', [LOG]: 'log', [LEAVES]: 'leaves', [PLANKS]: 'planks', [CRYSTAL]: 'shard' };
+const BREAK_TIME = { [GRASS]: 0.5, [DIRT]: 0.45, [SAND]: 0.4, [LOG]: 0.9, [LEAVES]: 0.2, [PLANKS]: 0.7, [STONE]: 2.4, [CRYSTAL]: 1.2 };
+const RECIPES = [
+  { out: 'planks', n: 4, need: { log: 1 } },
+  { out: 'stick', n: 4, need: { planks: 2 } },
+  { out: 'wsword', n: 1, need: { planks: 2, stick: 1 } },
+  { out: 'spick', n: 1, need: { stone: 3, stick: 2 } },
+  { out: 'ssword', n: 1, need: { stone: 2, stick: 1 } },
+  { out: 'glider', n: 1, need: { leaves: 8, stick: 4 }, once: true },
+];
+const slots = Array.from({ length: 9 }, () => null);
+let sel = 0;
+const count = id => slots.reduce((s, it) => s + (it && it.id === id ? it.n : 0), 0);
+function addItem(id, n = 1) {
+  let s = slots.find(it => it && it.id === id);
+  if (s) s.n += n;
+  else { const i = slots.findIndex(it => !it); if (i < 0) { toast('Hotbar full'); return false; } slots[i] = { id, n }; }
+  renderHotbar(); return true;
+}
+function removeItem(id, n) {
+  for (let i = 0; i < slots.length && n > 0; i++) {
+    const s = slots[i]; if (!s || s.id !== id) continue;
+    const take = Math.min(n, s.n); s.n -= take; n -= take; if (s.n <= 0) slots[i] = null;
+  }
+  renderHotbar();
+}
+const selItem = () => slots[sel] && ITEMS[slots[sel].id];
+
+const hotbarEl = document.getElementById('hotbar');
+const itemNameEl = document.getElementById('itemname');
+let nameTimer = 0;
+function renderHotbar() {
+  hotbarEl.innerHTML = '';
+  slots.forEach((s, i) => {
+    const d = document.createElement('div'); d.className = 'slot' + (i === sel ? ' sel' : '');
+    d.innerHTML = `<span class="key">${i + 1}</span>` + (s ? `<div class="icon" style="background:${ITEMS[s.id].color}"></div><span class="count">${s.n > 1 ? s.n : ''}</span>` : '');
+    hotbarEl.appendChild(d);
+  });
+  updateHeld();
+}
+function selectSlot(i) {
+  sel = (i + 9) % 9; renderHotbar();
+  const it = selItem(); itemNameEl.textContent = it ? it.name : ''; itemNameEl.style.opacity = 1; nameTimer = 1.6;
+}
+const recipesEl = document.getElementById('recipes');
+function renderRecipes() {
+  recipesEl.innerHTML = '';
+  RECIPES.forEach((r, i) => {
+    const owned = r.once && count(r.out) > 0;
+    const ok = !owned && Object.entries(r.need).every(([k, v]) => count(k) >= v);
+    const need = Object.entries(r.need).map(([k, v]) => `<span class="${count(k) >= v ? '' : 'miss'}">${v} ${ITEMS[k].name} (${count(k)})</span>`).join(' + ');
+    const row = document.createElement('div'); row.className = 'recipe';
+    row.innerHTML = `<div class="sw" style="background:${ITEMS[r.out].color}"></div><div class="info"><div class="name">${r.n > 1 ? r.n + ' ' : ''}${ITEMS[r.out].name}</div><div class="need">${owned ? 'Already crafted' : need}</div></div>`;
+    const b = document.createElement('button'); b.textContent = 'Craft'; b.disabled = !ok; b.id = 'craft-' + r.out;
+    b.onclick = () => { Object.entries(r.need).forEach(([k, v]) => removeItem(k, v)); addItem(r.out, r.n); onCraft(r.out); renderRecipes(); };
+    row.appendChild(b); recipesEl.appendChild(row);
+  });
+}
+
+// ---------- Goals (a tiny quest line) ----------
+const GOALS = [
+  { id: 'log', text: 'Chop a tree for logs' },
+  { id: 'sticks', text: 'Craft planks and sticks' },
+  { id: 'glider', text: 'Craft a Leaf Glider' },
+  { id: 'shard', text: 'Climb the cliff, take the Sky Shard' },
+  { id: 'glide', text: 'Glide off the cliff' },
+  { id: 'enemy', text: 'Defeat a Thornling' },
+];
+const done = new Set();
+const goalEl = document.getElementById('goalList');
+function renderGoals() { goalEl.innerHTML = GOALS.map(g => `<li class="${done.has(g.id) ? 'done' : ''}">${done.has(g.id) ? '✓' : '○'} ${g.text}</li>`).join(''); }
+function complete(id) { if (done.has(id)) return; done.add(id); renderGoals(); const g = GOALS.find(g => g.id === id); toast('Goal done: ' + g.text); if (done.size === GOALS.length) toast('All island goals done. Nice work!'); }
+function onCraft(id) { if (id === 'stick') complete('sticks'); if (id === 'glider') { complete('glider'); toast('Press Space in mid-air to glide'); } }
+renderGoals();
+
+// ---------- HUD helpers ----------
+const toastsEl = document.getElementById('toasts');
+function toast(msg) {
+  const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; toastsEl.appendChild(t);
+  while (toastsEl.children.length > 4) toastsEl.firstChild.remove();
+  setTimeout(() => { t.style.opacity = 0; setTimeout(() => t.remove(), 700); }, 2600);
+}
+const heartsEl = document.getElementById('hearts');
+function renderHearts() {
+  let s = ''; for (let i = 0; i < 5; i++) { const v = player.hp - i * 2; s += `<span class="${v >= 2 ? 'full' : v === 1 ? 'half' : 'empty'}">♥</span>`; }
+  heartsEl.innerHTML = s;
+}
+const stamEl = document.getElementById('stamina'), stamFg = document.getElementById('stamFg');
+const CIRC = 2 * Math.PI * 17; stamFg.style.strokeDasharray = CIRC;
+const stateEl = document.getElementById('state');
+const hurtEl = document.getElementById('hurt');
+
+// ---------- Held item and glider visuals ----------
+// The Mender: a small low-poly hero built from boxes, with pivots for limbs
+const hero = new THREE.Group(); scene.add(hero);
+const heroMat = c => new THREE.MeshLambertMaterial({ color: c });
+function part(w, h, d, c, x, y, z, parent) { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), heroMat(c)); m.position.set(x, y, z); (parent || hero).add(m); return m; }
+function limb(x, y) { const g = new THREE.Group(); g.position.set(x, y, 0); hero.add(g); return g; }
+const hipL = limb(-0.12, 0.8), hipR = limb(0.12, 0.8);
+for (const hp of [hipL, hipR]) { part(0.17, 0.72, 0.19, 0x3b4a5c, 0, -0.36, 0, hp); part(0.19, 0.12, 0.26, 0x4a3424, 0, -0.74, 0.03, hp); }
+part(0.46, 0.58, 0.27, 0x2f8f83, 0, 1.09, 0);
+part(0.48, 0.08, 0.29, 0x6b4a2b, 0, 0.83, 0);
+part(0.5, 0.1, 0.31, 0xf2b84b, 0, 1.36, 0);
+part(0.1, 0.32, 0.04, 0xf2b84b, 0.14, 1.2, -0.17);
+part(0.34, 0.34, 0.32, 0xe8b48a, 0, 1.6, 0);
+part(0.37, 0.12, 0.35, 0x5a3a22, 0, 1.79, 0);
+part(0.37, 0.22, 0.07, 0x5a3a22, 0, 1.66, -0.15);
+part(0.05, 0.06, 0.02, 0x1d1d1d, -0.08, 1.62, 0.165); part(0.05, 0.06, 0.02, 0x1d1d1d, 0.08, 1.62, 0.165);
+part(0.34, 0.4, 0.16, 0x8a6a3e, 0, 1.12, -0.21);
+part(0.36, 0.08, 0.18, 0x6b4a2b, 0, 1.33, -0.21);
+const shL = limb(-0.31, 1.34), shR = limb(0.31, 1.34);
+for (const sh of [shL, shR]) { part(0.13, 0.56, 0.15, 0x2f8f83, 0, -0.26, 0, sh); part(0.12, 0.12, 0.12, 0xe8b48a, 0, -0.58, 0, sh); }
+const held = new THREE.Group(); shR.add(held); held.position.set(0, -0.6, 0.05); held.rotation.y = Math.PI;
+let walkPhase = 0;
+let heldMesh = null;
+function updateHeld() {
+  if (heldMesh) { held.remove(heldMesh); heldMesh = null; }
+  const s = slots[sel]; if (!s) return;
+  const it = ITEMS[s.id]; const mat = new THREE.MeshLambertMaterial({ color: it.color });
+  if (it.block) heldMesh = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.15), mat);
+  else if (it.damage || it.pick || s.id === 'stick') {
+    heldMesh = new THREE.Group();
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.04, 0.2), new THREE.MeshLambertMaterial({ color: '#7a5a34' }));
+    handle.position.z = 0.05; heldMesh.add(handle);
+    if (it.damage) { const blade = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.02, 0.5), mat); blade.position.z = -0.3; heldMesh.add(blade); const guard = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.04, 0.04), mat); guard.position.z = -0.05; heldMesh.add(guard); }
+    if (it.pick) { const head = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.05, 0.06), mat); head.position.z = -0.08; heldMesh.add(head); handle.scale.z = 1.6; }
+    heldMesh.rotation.x = -0.5;
+  } else heldMesh = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, 0.03), new THREE.MeshBasicMaterial({ color: it.color }));
+  held.add(heldMesh);
+}
+const gliderMesh = new THREE.Group();
+{
+  const cloth = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.04, 1.1), new THREE.MeshLambertMaterial({ color: 0x5fbf4f }));
+  const stripe = new THREE.Mesh(new THREE.BoxGeometry(2.62, 0.05, 0.2), new THREE.MeshLambertMaterial({ color: 0xf2b84b }));
+  gliderMesh.add(cloth, stripe);
+  for (const sx of [-0.35, 0.35]) { const cord = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.75, 0.02), new THREE.MeshLambertMaterial({ color: 0x4a3424 })); cord.position.set(sx, -0.38, 0); gliderMesh.add(cord); }
+  gliderMesh.position.set(0, 2.55, 0.05); gliderMesh.visible = false; hero.add(gliderMesh);
+}
+const outline = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1.004, 1.004, 1.004)), new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.55 }));
+scene.add(outline);
+const crack = new THREE.Mesh(new THREE.BoxGeometry(1.01, 1.01, 1.01), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, depthWrite: false }));
+scene.add(crack);
+
+// ---------- Physics ----------
+function collides(x, y, z, hw, h) {
+  for (let ix = Math.floor(x - hw); ix <= Math.floor(x + hw); ix++)
+    for (let iy = Math.floor(y); iy <= Math.floor(y + h - 0.001); iy++)
+      for (let iz = Math.floor(z - hw); iz <= Math.floor(z + hw); iz++)
+        if (getB(ix, iy, iz) !== AIR) return true;
+  return false;
+}
+function moveAxis(e, axis, d) {
+  if (!d) return false;
+  const p = e.pos; p[axis] += d;
+  if (!collides(p.x, p.y, p.z, e.hw, e.h)) return false;
+  if (axis === 'y') p.y = d < 0 ? Math.floor(p.y) + 1 : Math.floor(p.y + e.h) - e.h - 0.001;
+  else p[axis] = d > 0 ? Math.floor(p[axis] + e.hw) - e.hw - 0.001 : Math.floor(p[axis] - e.hw) + 1 + e.hw + 0.001;
+  return true;
+}
+function moveEntity(e, dt) {
+  const steps = Math.max(1, Math.ceil(Math.max(Math.abs(e.vel.x), Math.abs(e.vel.y), Math.abs(e.vel.z)) * dt / 0.3));
+  const sdt = dt / steps; e.hitX = e.hitZ = false; let landed = 0;
+  for (let i = 0; i < steps; i++) {
+    if (moveAxis(e, 'x', e.vel.x * sdt)) { e.hitX = true; e.vel.x = 0; }
+    if (moveAxis(e, 'z', e.vel.z * sdt)) { e.hitZ = true; e.vel.z = 0; }
+    const vy = e.vel.y;
+    if (moveAxis(e, 'y', vy * sdt)) { if (vy < 0) landed = Math.min(landed, vy); e.vel.y = 0; }
+  }
+  e.pos.x = Math.min(W - 0.5, Math.max(0.5, e.pos.x)); e.pos.z = Math.min(D - 0.5, Math.max(0.5, e.pos.z));
+  e.grounded = collides(e.pos.x, e.pos.y - 0.05, e.pos.z, e.hw, 0.05);
+  return landed;
+}
+
+// ---------- Player ----------
+const player = {
+  pos: new THREE.Vector3(SPAWN.x, spawnY(), SPAWN.z), vel: new THREE.Vector3(), hw: 0.3, h: 1.8,
+  yaw: Math.PI * 0.75, grounded: false, hp: 10, stamina: 100, exhausted: false, stamRegenDelay: 0,
+  mode: 'walk', wall: null, mantleT: 0, leapT: 0, invuln: 0, regenT: 0, dead: false, attackCD: 0, swingT: 0,
+};
+const keys = new Set(); const pressed = new Set();
+let mouseDown = false;
+const EYE = 1.62;
+// The camera orbits the hero; movement is relative to where the camera looks.
+const cam = { yaw: Math.PI * 0.75, pitch: -0.25, dist: 4.6, first: false, curDist: 4.6 };
+function forwardFlat() { return new THREE.Vector3(-Math.sin(cam.yaw), 0, -Math.cos(cam.yaw)); }
+function rightFlat() { return new THREE.Vector3(Math.cos(cam.yaw), 0, -Math.sin(cam.yaw)); }
+function lookDir() { const cp = Math.cos(cam.pitch); return new THREE.Vector3(-Math.sin(cam.yaw) * cp, Math.sin(cam.pitch), -Math.cos(cam.yaw) * cp); }
+const yawOf = d => Math.atan2(-d.x, -d.z);
+function turnToward(target, rate) { const diff = ((target - player.yaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI; player.yaw += diff * Math.min(1, rate); }
+function updateCamera(roll) {
+  const p = player.pos;
+  if (cam.first) {
+    hero.visible = false;
+    camera.position.set(p.x, p.y + EYE, p.z); camera.rotation.set(cam.pitch, cam.yaw, roll || 0, 'YXZ'); return;
+  }
+  const back = lookDir().negate();
+  const target = new THREE.Vector3(p.x, p.y + 1.6, p.z).addScaledVector(rightFlat(), 0.55);
+  if (solidAt(target.x, target.y, target.z)) target.set(p.x, p.y + 1.6, p.z);
+  const hit = raycast(target, back, cam.dist);
+  const want = hit ? Math.max(0.35, hit.t - 0.3) : cam.dist;
+  cam.curDist = want < cam.curDist ? want : cam.curDist + (want - cam.curDist) * 0.12;
+  camera.position.copy(target).addScaledVector(back, cam.curDist);
+  camera.rotation.set(cam.pitch, cam.yaw, roll || 0, 'YXZ');
+  hero.visible = cam.curDist > 0.9;
+}
+const useStamina = (amt) => { player.stamina = Math.max(0, player.stamina - amt); player.stamRegenDelay = 0.7; if (player.stamina <= 0 && !player.exhausted) { player.exhausted = true; toast('Out of stamina'); } };
+function wallProbe(wall, yOff) {
+  const p = player.pos; return solidAt(p.x + wall.x * (player.hw + 0.25), p.y + yOff, p.z + wall.z * (player.hw + 0.25));
+}
+function snapWall(f) { return Math.abs(f.x) > Math.abs(f.z) ? new THREE.Vector3(Math.sign(f.x), 0, 0) : new THREE.Vector3(0, 0, Math.sign(f.z)); }
+function startGlide() {
+  if (count('glider') <= 0) { toast('Craft a Leaf Glider (C) to glide'); return; }
+  if (player.exhausted) return;
+  player.mode = 'glide'; gliderMesh.visible = true;
+}
+function stopGlide() { if (player.mode === 'glide') { player.mode = 'walk'; gliderMesh.visible = false; } }
+let glideStartY = 0, glideDist = 0;
+
+function updatePlayer(dt) {
+  const p = player, v = p.vel;
+  const f = forwardFlat(), r = rightFlat();
+  const inF = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
+  const inR = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
+  const shift = keys.has('ShiftLeft') || keys.has('ShiftRight');
+  const jump = pressed.has('Space');
+  const inWater = p.pos.y + 0.7 < WATER_SURF;
+
+  if (p.mode === 'climb') {
+    const wall = p.wall;
+    p.yaw = yawOf(wall);
+    let t = new THREE.Vector3(-wall.z, 0, wall.x); if (t.dot(r) < 0) t.negate();
+    if (p.leapT > 0) { p.leapT -= dt; v.set(0, 7, 0); }
+    else { v.set(t.x * inR * 2.2 + wall.x * 0.6, inF * 2.6, t.z * inR * 2.2 + wall.z * 0.6); }
+    useStamina((inF || inR ? 11 : 3.5) * dt + 0); p.stamRegenDelay = 0.7;
+    if (jump) { if (p.stamina >= 12) { useStamina(18); p.leapT = 0.28; } else { p.mode = 'walk'; v.set(-wall.x * 2, 2, -wall.z * 2); } }
+    moveEntity(p, dt);
+    const chest = wallProbe(wall, 1.2), feet = wallProbe(wall, 0.3);
+    if (!chest && feet && (inF > 0 || p.leapT > 0)) { p.mode = 'mantle'; p.mantleT = 0.42; p.leapT = 0; }
+    else if (!chest && !feet) p.mode = 'walk';
+    else if (shift) { p.mode = 'walk'; v.set(-wall.x * 1.5, 0, -wall.z * 1.5); }
+    else if (p.grounded && inF < 0) p.mode = 'walk';
+    else if (p.exhausted) { p.mode = 'walk'; v.set(-wall.x * 1.5, 0, -wall.z * 1.5); }
+  } else if (p.mode === 'mantle') {
+    p.mantleT -= dt;
+    v.set(p.wall.x * 2.8, p.mantleT > 0.18 ? 5.5 : 1.5, p.wall.z * 2.8);
+    moveEntity(p, dt);
+    if (p.mantleT <= 0) p.mode = 'walk';
+  } else if (p.mode === 'glide') {
+    v.y += (-2.0 - v.y) * Math.min(1, 5 * dt);
+    const target = f.clone().multiplyScalar(9 + inF * 2).addScaledVector(r, inR * 3);
+    const k = Math.min(1, 2.2 * dt);
+    v.x += (target.x - v.x) * k; v.z += (target.z - v.z) * k;
+    useStamina(7 * dt);
+    if (cam.first) p.yaw = cam.yaw; else turnToward(yawOf(v), 6 * dt);
+    const startY = p.pos.y;
+    moveEntity(p, dt);
+    glideDist += Math.hypot(v.x, v.z) * dt;
+    if (glideStartY - p.pos.y > 12 && glideDist > 20) complete('glide');
+    const wall = snapWall(f);
+    if (p.grounded || inWater || jump || shift || p.exhausted) stopGlide();
+    else if (inF > 0 && wallProbe(wall, 1.2) && !p.exhausted) { stopGlide(); p.mode = 'climb'; p.wall = wall; }
+  } else {
+    // walking, falling, swimming
+    const sprint = shift && p.grounded && inF > 0 && !p.exhausted;
+    const speed = (sprint ? 8.2 : 5.2) * (inWater ? 0.55 : 1);
+    if (sprint) useStamina(14 * dt);
+    const wish = f.clone().multiplyScalar(inF).addScaledVector(r, inR); if (wish.lengthSq() > 1) wish.normalize();
+    if (cam.first) p.yaw = cam.yaw; else if (wish.lengthSq() > 0.01) turnToward(yawOf(wish), 12 * dt);
+    const k = Math.min(1, (p.grounded ? 14 : inWater ? 4 : 2.5) * dt);
+    v.x += (wish.x * speed - v.x) * k; v.z += (wish.z * speed - v.z) * k;
+    if (inWater) {
+      v.y -= 7 * dt; v.y *= Math.pow(0.15, dt);
+      if (keys.has('Space')) v.y = Math.min(v.y + 20 * dt, 3.2);
+    } else {
+      v.y = Math.max(-45, v.y - 26 * dt);
+      if (jump && p.grounded) v.y = 8.2;
+      else if (jump && !p.grounded && v.y < 1.5) { glideStartY = p.pos.y; glideDist = 0; startGlide(); }
+    }
+    const landed = moveEntity(p, dt);
+    if (landed < -16 && !inWater) { const dmg = Math.ceil((-landed - 16) / 3.5); hurtPlayer(dmg, null); toast('Ouch, a hard landing'); }
+    if (wish.lengthSq() > 0.01) {
+      const wd = wish.clone().normalize(), wall = snapWall(wd);
+      const canClimb = !p.exhausted && !inWater && wallProbe(wall, 1.2) && wallProbe(wall, 0.4) && (wd.x * wall.x + wd.z * wall.z) > 0.6;
+      if (canClimb) { p.mode = 'climb'; p.wall = wall; v.set(0, 0, 0); }
+    }
+  }
+
+  // stamina regen
+  if (p.mode === 'walk' && (p.grounded || inWater)) {
+    p.stamRegenDelay -= dt;
+    if (p.stamRegenDelay <= 0) p.stamina = Math.min(100, p.stamina + (p.exhausted ? 28 : 40) * dt);
+    if (p.exhausted && p.stamina >= 100) p.exhausted = false;
+  }
+  // health regen
+  p.invuln -= dt; p.regenT += dt;
+  if (p.regenT > 7 && p.hp < 10) { p.hp++; p.regenT = 0; renderHearts(); }
+  if (p.pos.y < -10) { p.pos.set(SPAWN.x, spawnY(), SPAWN.z); v.set(0, 0, 0); }
+
+  animateHero(dt, inWater);
+  updateCamera(p.mode === 'glide' ? -inR * 0.08 : 0);
+}
+function animateHero(dt, inWater) {
+  const p = player, v = p.vel;
+  hero.position.copy(p.pos); hero.rotation.y = p.yaw + Math.PI;
+  const sp = Math.hypot(v.x, v.z);
+  let lL = 0, lR = 0, aL = 0, aR = 0, aLz = 0, aRz = 0;
+  if (p.mode === 'climb' || p.mode === 'mantle') {
+    walkPhase += (Math.abs(v.y) + Math.hypot(v.x, v.z)) * dt * 3;
+    const s = Math.sin(walkPhase);
+    aL = -2.7 + s * 0.45; aR = -2.7 - s * 0.45; lL = -0.5 - s * 0.4; lR = -0.5 + s * 0.4;
+  } else if (p.mode === 'glide') {
+    aL = aR = -3.0; aLz = -0.25; aRz = 0.25; lL = 0.35; lR = 0.25;
+  } else if (inWater) {
+    walkPhase += dt * 5; const s = Math.sin(walkPhase);
+    aL = -1.2 + s * 0.8; aR = -1.2 - s * 0.8; lL = s * 0.5; lR = -s * 0.5;
+  } else if (!p.grounded) {
+    aL = aR = -0.4; aLz = -0.6; aRz = 0.6; lL = -0.5; lR = 0.2;
+  } else {
+    walkPhase += sp * dt * 2.2;
+    const amt = Math.min(1, sp / 5) * (sp > 7 ? 1.0 : 0.7), s = Math.sin(walkPhase);
+    lL = s * amt; lR = -s * amt; aL = -s * amt * 0.9; aR = s * amt * 0.9;
+  }
+  const k = Math.min(1, 16 * dt);
+  hipL.rotation.x += (lL - hipL.rotation.x) * k; hipR.rotation.x += (lR - hipR.rotation.x) * k;
+  shL.rotation.x += (aL - shL.rotation.x) * k; shR.rotation.x += (aR - shR.rotation.x) * k;
+  shL.rotation.z += (aLz - shL.rotation.z) * k; shR.rotation.z += (aRz - shR.rotation.z) * k;
+  const sw = Math.max(0, p.swingT) / 0.3;
+  if (sw > 0) { shR.rotation.x = -1.4 - Math.sin(sw * Math.PI) * 1.3; shR.rotation.z = 0; }
+}
+function hurtPlayer(amt, from) {
+  const p = player; if (p.dead || p.invuln > 0) return;
+  p.hp -= amt; p.invuln = 0.7; p.regenT = 0; renderHearts();
+  hurtEl.style.opacity = 1; setTimeout(() => (hurtEl.style.opacity = 0), 180);
+  if (from) { const d = p.pos.clone().sub(from).setY(0).normalize(); p.vel.set(d.x * 7, 5, d.z * 7); if (p.mode !== 'walk') { stopGlide(); p.mode = 'walk'; } }
+  if (p.hp <= 0) { p.dead = true; document.exitPointerLock?.(); show('dead'); }
+}
+
+// ---------- Block raycast ----------
+function raycast(o, d, maxD) {
+  let x = Math.floor(o.x), y = Math.floor(o.y), z = Math.floor(o.z);
+  const sx = Math.sign(d.x), sy = Math.sign(d.y), sz = Math.sign(d.z);
+  const tdx = sx ? Math.abs(1 / d.x) : Infinity, tdy = sy ? Math.abs(1 / d.y) : Infinity, tdz = sz ? Math.abs(1 / d.z) : Infinity;
+  let tmx = sx > 0 ? (x + 1 - o.x) * tdx : sx < 0 ? (o.x - x) * tdx : Infinity;
+  let tmy = sy > 0 ? (y + 1 - o.y) * tdy : sy < 0 ? (o.y - y) * tdy : Infinity;
+  let tmz = sz > 0 ? (z + 1 - o.z) * tdz : sz < 0 ? (o.z - z) * tdz : Infinity;
+  let n = [0, 0, 0], t = 0;
+  while (t <= maxD) {
+    const b = getB(x, y, z);
+    if (b !== AIR && y >= 0) return { x, y, z, n, t, b };
+    if (tmx < tmy && tmx < tmz) { x += sx; t = tmx; tmx += tdx; n = [-sx, 0, 0]; }
+    else if (tmy < tmz) { y += sy; t = tmy; tmy += tdy; n = [0, -sy, 0]; }
+    else { z += sz; t = tmz; tmz += tdz; n = [0, 0, -sz]; }
+  }
+  return null;
+}
+function rayBox(o, d, min, max) {
+  let t0 = 0, t1 = Infinity;
+  for (const a of ['x', 'y', 'z']) {
+    if (Math.abs(d[a]) < 1e-8) { if (o[a] < min[a] || o[a] > max[a]) return null; continue; }
+    let ta = (min[a] - o[a]) / d[a], tb = (max[a] - o[a]) / d[a]; if (ta > tb) [ta, tb] = [tb, ta];
+    t0 = Math.max(t0, ta); t1 = Math.min(t1, tb); if (t0 > t1) return null;
+  }
+  return t0;
+}
+
+// ---------- Thornling enemy ----------
+const enemies = [];
+function makeThornling(x, z) {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshLambertMaterial({ color: 0x51633f, emissive: 0x000000 });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.7, 0.8), mat); body.position.y = 0.35; g.add(body);
+  const thornMat = new THREE.MeshLambertMaterial({ color: 0x9a7444 });
+  const spikes = [[0, 0.78, 0, 0], [0.3, 0.72, 0.25, 0.4], [-0.3, 0.72, -0.2, -0.4], [0.28, 0.7, -0.28, 0.3], [-0.26, 0.7, 0.3, -0.3], [0.45, 0.4, 0, 1.4], [-0.45, 0.4, 0, -1.4]];
+  for (const [sx, sy, sz, rz] of spikes) { const s = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.32, 5), thornMat); s.position.set(sx, sy, sz); s.rotation.z = -rz; g.add(s); }
+  const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffa630 });
+  for (const ex of [-0.18, 0.18]) { const e = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.1, 0.04), eyeMat); e.position.set(ex, 0.45, 0.41); g.add(e); }
+  scene.add(g);
+  const e = { mesh: g, body, mat, pos: new THREE.Vector3(x, 0, z), vel: new THREE.Vector3(), hw: 0.4, h: 0.8, hp: 6, hopT: rng() * 2, hurtT: 0, attackCD: 0, grounded: false, alive: true, respawnT: 0, yaw: 0 };
+  placeOnGround(e); enemies.push(e); return e;
+}
+function placeOnGround(e) { const x = Math.floor(e.pos.x), z = Math.floor(e.pos.z); let y = H - 1; while (y > 0 && getB(x, y - 1, z) === AIR) y--; e.pos.y = y + 0.01; }
+function randomEnemySpot() {
+  for (let i = 0; i < 200; i++) {
+    const x = 6 + rng() * (W - 12), z = 6 + rng() * (D - 12); const h = heights[Math.floor(x) + Math.floor(z) * W];
+    if (h <= WATER + 1 || h > 24) continue;
+    if (Math.hypot(x - player.pos.x, z - player.pos.z) < 18) continue;
+    if (Math.hypot(x - MESA.x, z - MESA.z) < 12) continue;
+    return [x, z];
+  }
+  return [20, 20];
+}
+for (let i = 0; i < 4; i++) { const [x, z] = randomEnemySpot(); makeThornling(x, z); }
+let defeated = 0;
+function updateEnemies(dt) {
+  for (const e of enemies) {
+    if (!e.alive) {
+      e.respawnT -= dt;
+      if (e.respawnT <= 0) { const [x, z] = randomEnemySpot(); e.pos.set(x, 0, z); placeOnGround(e); e.hp = 6; e.alive = true; e.mesh.visible = true; e.vel.set(0, 0, 0); }
+      continue;
+    }
+    const toP = player.pos.clone().sub(e.pos); const dist = Math.hypot(toP.x, toP.z);
+    const chasing = dist < 13 && !player.dead && Math.abs(toP.y) < 6;
+    e.hopT -= dt; e.attackCD -= dt; e.hurtT -= dt;
+    if (e.grounded) {
+      e.vel.x *= Math.pow(0.002, dt); e.vel.z *= Math.pow(0.002, dt);
+      if (e.hopT <= 0 && e.hurtT <= 0) {
+        if (chasing) { const d = toP.setY(0).normalize(); e.vel.set(d.x * 4.2, 6.5, d.z * 4.2); e.hopT = 0.55 + rng() * 0.35; e.yaw = Math.atan2(d.x, d.z); }
+        else { const a = rng() * Math.PI * 2; e.vel.set(Math.sin(a) * 2, 4.5, Math.cos(a) * 2); e.hopT = 1.4 + rng() * 2.2; e.yaw = a; }
+      }
+    }
+    const inWater = e.pos.y + 0.4 < WATER_SURF;
+    e.vel.y = inWater ? Math.min(e.vel.y + 12 * dt, 2.5) : Math.max(-40, e.vel.y - 24 * dt);
+    moveEntity(e, dt);
+    // contact damage
+    const dy = player.pos.y - e.pos.y;
+    if (e.attackCD <= 0 && dist < 0.85 && dy > -1.7 && dy < 0.85) { hurtPlayer(1, e.pos); e.attackCD = 1.0; }
+    e.mesh.position.copy(e.pos);
+    e.mesh.rotation.y += ((e.yaw - e.mesh.rotation.y + Math.PI * 3) % (Math.PI * 2) - Math.PI) * Math.min(1, 8 * dt);
+    const squash = e.grounded ? 0.88 : 1.08; e.body.scale.y += (squash - e.body.scale.y) * Math.min(1, 10 * dt);
+    e.mat.emissive.setHex(e.hurtT > 0 ? 0xaa2222 : 0x000000);
+  }
+}
+function attack(e) {
+  const it = selItem(); const dmg = it && it.damage ? it.damage : 1;
+  e.hp -= dmg; e.hurtT = 0.25;
+  const d = e.pos.clone().sub(player.pos).setY(0).normalize(); e.vel.set(d.x * 7, 4.5, d.z * 7); e.hopT = 0.7;
+  if (e.hp <= 0) { e.alive = false; e.mesh.visible = false; e.respawnT = 25; defeated++; toast('Thornling defeated'); complete('enemy'); }
+}
+
+// ---------- Interaction ----------
+let breakTarget = null, breakProgress = 0;
+function currentTarget() {
+  const o = camera.position.clone(), d = lookDir();
+  let best = null;
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    const t = rayBox(o, d, { x: e.pos.x - 0.5, y: e.pos.y, z: e.pos.z - 0.5 }, { x: e.pos.x + 0.5, y: e.pos.y + 0.9, z: e.pos.z + 0.5 });
+    if (t !== null && e.pos.distanceTo(player.pos) < 3.4 && (!best || t < best.t)) best = { enemy: e, t };
+  }
+  let hit = raycast(o, d, 5.5 + (cam.first ? 0 : cam.curDist));
+  if (hit) { const eye = new THREE.Vector3(player.pos.x, player.pos.y + EYE, player.pos.z); if (eye.distanceTo(new THREE.Vector3(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5)) > 5.5) hit = null; }
+  if (best && (!hit || best.t < hit.t)) return best;
+  return hit ? { block: hit } : null;
+}
+function placeBlock() {
+  const it = selItem(); if (!it || !it.block) return;
+  const tg = currentTarget(); if (!tg || !tg.block) return;
+  const h = tg.block; const x = h.x + h.n[0], y = h.y + h.n[1], z = h.z + h.n[2];
+  if (getB(x, y, z) !== AIR || y >= H) return;
+  const overlaps = (e) => x + 1 > e.pos.x - e.hw && x < e.pos.x + e.hw && z + 1 > e.pos.z - e.hw && z < e.pos.z + e.hw && y + 1 > e.pos.y && y < e.pos.y + e.h;
+  if (overlaps(player) || enemies.some(e => e.alive && overlaps(e))) return;
+  setBlock(x, y, z, it.block); removeItem(slots[sel].id, 1); player.swingT = 0.2;
+}
+function updateInteraction(dt) {
+  const tg = currentTarget();
+  if (tg && tg.block) { outline.visible = true; outline.position.set(tg.block.x + 0.5, tg.block.y + 0.5, tg.block.z + 0.5); }
+  else outline.visible = false;
+  player.attackCD -= dt;
+  if (mouseDown && player.mode === 'walk') turnToward(cam.yaw, 20 * dt);
+  if (mouseDown && tg && tg.enemy) {
+    if (player.attackCD <= 0) { attack(tg.enemy); player.attackCD = 0.45; player.swingT = 0.3; }
+    breakTarget = null; breakProgress = 0;
+  } else if (mouseDown && tg && tg.block && player.mode !== 'climb') {
+    const h = tg.block, key = h.x + ',' + h.y + ',' + h.z;
+    if (breakTarget !== key) { breakTarget = key; breakProgress = 0; }
+    let time = BREAK_TIME[h.b] || 0.6;
+    const it = selItem(); if (h.b === STONE && it && it.pick) time = 0.6;
+    breakProgress += dt / time;
+    if (player.swingT <= 0) player.swingT = 0.3;
+    if (breakProgress >= 1) {
+      setBlock(h.x, h.y, h.z, AIR); const drop = DROPS[h.b];
+      if (drop) addItem(drop, 1);
+      if (h.b === LOG) complete('log');
+      if (h.b === CRYSTAL) { complete('shard'); beacon.visible = false; toast('You found the Sky Shard!'); }
+      if (h.b === STONE && !(it && it.pick) && count('spick') === 0) toast('Tip: a Stone Pick breaks stone much faster');
+      breakTarget = null; breakProgress = 0;
+    }
+    crack.visible = true; crack.position.copy(outline.position); crack.material.opacity = breakProgress * 0.55;
+  } else { breakTarget = null; breakProgress = 0; }
+  if (!breakTarget) crack.visible = false;
+  // held item swing
+  player.swingT -= dt;
+  const s = Math.max(0, player.swingT) / 0.3;
+}
+
+// ---------- Input ----------
+let running = false;
+const screens = { start: document.getElementById('startScreen'), craft: document.getElementById('craftScreen'), dead: document.getElementById('deadScreen') };
+function show(which) { for (const k in screens) screens[k].hidden = k !== which; }
+function lock() { try { const r = canvas.requestPointerLock(); if (r && r.catch) r.catch(() => {}); } catch (e) {} }
+document.getElementById('playBtn').onclick = () => { show(null); lock(); running = true; };
+document.getElementById('closeCraft').onclick = () => { show(null); lock(); running = true; };
+document.getElementById('respawnBtn').onclick = () => { player.dead = false; player.hp = 10; player.stamina = 100; player.exhausted = false; player.mode = 'walk'; gliderMesh.visible = false; player.pos.set(SPAWN.x, spawnY(), SPAWN.z); player.vel.set(0, 0, 0); renderHearts(); show(null); lock(); running = true; };
+canvas.addEventListener('click', () => { if (!document.pointerLockElement && !player.dead && screens.craft.hidden) { show(null); lock(); running = true; } });
+document.addEventListener('pointerlockchange', () => {
+  if (!document.pointerLockElement) { running = false; mouseDown = false; keys.clear(); if (screens.craft.hidden && screens.dead.hidden) show('start'); }
+});
+document.addEventListener('mousemove', e => {
+  if (document.pointerLockElement !== canvas) return;
+  cam.yaw -= e.movementX * 0.0024; cam.pitch -= e.movementY * 0.0024;
+  cam.pitch = Math.max(-1.45, Math.min(cam.first ? 1.5 : 1.1, cam.pitch));
+});
+canvas.addEventListener('mousedown', e => { if (!running) return; if (e.button === 0) mouseDown = true; if (e.button === 2) placeBlock(); });
+window.addEventListener('mouseup', e => { if (e.button === 0) mouseDown = false; });
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+window.addEventListener('wheel', e => { if (running) selectSlot(sel + (e.deltaY > 0 ? 1 : -1)); }, { passive: true });
+window.addEventListener('keydown', e => {
+  if (e.code === 'KeyC' || e.code === 'KeyE') {
+    if (!screens.craft.hidden) { show(null); lock(); running = true; }
+    else if (running) { running = false; renderRecipes(); show('craft'); document.exitPointerLock?.(); }
+    return;
+  }
+  if (!running) return;
+  if (e.code === 'Space') e.preventDefault();
+  if (!keys.has(e.code)) pressed.add(e.code);
+  keys.add(e.code);
+  if (/^Digit[1-9]$/.test(e.code)) selectSlot(+e.code.slice(5) - 1);
+  if (e.code === 'KeyV') { cam.first = !cam.first; toast(cam.first ? 'First person' : 'Third person'); }
+});
+window.addEventListener('keyup', e => keys.delete(e.code));
+window.addEventListener('blur', () => keys.clear());
+
+// ---------- Main loop ----------
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (running && !player.dead) {
+    updatePlayer(dt); updateEnemies(dt); updateInteraction(dt);
+  } else { animateHero(0, false); updateCamera(0); }
+  pressed.clear();
+  for (const k of dirty) { const [cx, cz] = k.split(',').map(Number); buildChunk(cx, cz); }
+  dirty.clear();
+  // HUD
+  const st = player.stamina / 100;
+  stamFg.style.strokeDashoffset = CIRC * (1 - st);
+  stamEl.style.opacity = st >= 0.999 ? 0 : 1;
+  stamEl.classList.toggle('tired', player.exhausted || st < 0.25);
+  stateEl.textContent = { climb: 'Climbing', mantle: 'Climbing', glide: 'Gliding', walk: player.pos.y + 0.7 < WATER_SURF ? 'Swimming' : player.grounded ? 'On foot' : 'Falling' }[player.mode];
+  if (nameTimer > 0) { nameTimer -= dt; if (nameTimer <= 0) itemNameEl.style.opacity = 0; }
+  beacon.material.opacity = 0.2 + Math.sin(now / 500) * 0.08;
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+renderHotbar(); renderHearts(); selectSlot(0);
+window.__game = { cam, hero, camera, player, enemies, keys, pressed, addItem, count, done, setRunning: v => (running = v), getB, MESA, mesaTop, updatePlayer, frameOnce: () => {} };
+requestAnimationFrame(frame);
+})();
+</script>
