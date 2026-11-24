@@ -324,7 +324,7 @@ func _init() -> void:
 			shot("26_cave")
 			game.player.first_person = false
 			for k in game.world.chests:
-				if game.world.chests[k] != "shrine":
+				if game.world.chests[k] != "shrine" and game.world.on_island(Vector3(k)):
 					game._open_chest(k)
 			check(game.caches_found == 5, "found all caches (%d)" % game.caches_found)
 			check(game.done.has("caches"), "side goal caches")

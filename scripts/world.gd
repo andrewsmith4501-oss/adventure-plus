@@ -2,11 +2,22 @@ extends Node3D
 ## The voxel world: block data, terrain generation for Hearthvale and the
 ## Gale Steppes, the Windworn Hollow dungeon, chunk meshes and the small
 ## physics helpers (collision, raycast) everything else uses.
+##
+## The handmade island (Hearthvale, the Steppes, the Hollow and the Shrine)
+## fills x 0..W, z 0..D. Everything around it is an endless, seeded world
+## that is generated in 16 x 16 chunks on worker threads as you travel:
+## seas, plains, forests, dunes, badlands, snowy pine woods and mountains,
+## with old ruins and floating isles to find.
 
+## Size of the handmade island (in blocks).
 const W := 160
 const D := 112
-const H := 48
+const H := 64
 const CH := 16
+## How many chunks around the hero are kept loaded and drawn.
+const VIEW := 10
+## The world seed. The same seed always gives the same world.
+const SEED := 1337
 const WATER := 7
 const WATER_SURF := 7.8
 
@@ -40,6 +51,20 @@ const CRATE := 27
 const CHEST := 28
 const CHEST_OPEN := 29
 const FLAG := 30
+const SNOW := 31
+const CLAY := 32
+const CACTUS := 33
+const PINE := 34
+
+## Biomes of the wild lands, by id. region_at() returns these names.
+const BIOMES := ["sea", "plains", "forest", "desert", "badlands", "taiga", "peaks"]
+const B_SEA := 0
+const B_PLAINS := 1
+const B_FOREST := 2
+const B_DESERT := 3
+const B_BADLANDS := 4
+const B_TAIGA := 5
+const B_PEAKS := 6
 
 ## Blocks the player can't mine (dungeon structure and puzzle pieces).
 const UNBREAKABLE := [LOOMSTONE, LOOMVEIN, LOOMDOOR, PLATE, PLATE_ON, NODE, NODE_ON, TABLET, CRATE, CHEST, CHEST_OPEN]
@@ -78,7 +103,10 @@ const FORD_Z := 40
 const ISLE_X := 90
 const ISLE_Z := 24
 
+## Only used while the island is generated (one flat array, a column of H
+## blocks per x, z). Afterwards every block lives in a chunk.
 var data := PackedByteArray()
+## Ground height of each island column (x + z * W), from the generator.
 var heights := PackedInt32Array()
 var col_top := PackedInt32Array()
 var needle_top := 0
@@ -100,11 +128,43 @@ var ford := {}
 ## Handy places for tests and hints (the isle's height, the cave).
 var spots := {}
 
+## Chunk meshes: Vector2i chunk -> MeshInstance3D.
 var _chunks := {}
 var _dirty := {}
+## Chunk blocks: Vector2i -> PackedByteArray of CH * CH columns of H blocks.
+var _cdata := {}
+## Highest solid block in each column of a chunk: Vector2i -> PackedInt32Array.
+var _ctop := {}
+## Wild chunks the player changed. They are kept when you walk away.
+var _modified := {}
+## Chunks being generated on worker threads: Vector2i -> task id.
+var _pending := {}
+var _results: Array = []
+var _mutex := Mutex.new()
+## Chunks whose blocks are known but which still need a mesh (built here).
+var _main_queue: Array = []
+var _center := Vector2i(1 << 30, 0)
+var _want: Array = []
+var _all_loaded := false
+var _unload_t := 0.0
+var _max_tasks := 3
+var _flat := true
+var _last_k := Vector2i(1 << 30, 0)
+var _last_c := PackedByteArray()
 var _noise := FastNoiseLite.new()
+var _n_cont := FastNoiseLite.new()
+var _n_temp := FastNoiseLite.new()
+var _n_moist := FastNoiseLite.new()
+var _n_hills := FastNoiseLite.new()
+var _n_mount := FastNoiseLite.new()
+var _n_ridge := FastNoiseLite.new()
 var _rng := RandomNumberGenerator.new()
 var _material := StandardMaterial3D.new()
+# Lookup tables for meshing on worker threads (read only once built).
+var _pal := PackedColorArray()
+var _glow := PackedByteArray()
+var _face_n := PackedInt32Array()
+var _face_ao := PackedInt32Array()
 
 # Other mesas on the Steppes: [x, z, radius, top].
 var _mesas := [
@@ -141,6 +201,10 @@ var colors := {
 	CHEST: {"top": Color(0.92, 0.72, 0.30), "side": Color(0.55, 0.36, 0.20), "bottom": Color(0.45, 0.3, 0.18)},
 	CHEST_OPEN: {"top": Color(0.30, 0.22, 0.14), "side": Color(0.48, 0.32, 0.19), "bottom": Color(0.45, 0.3, 0.18)},
 	FLAG: {"all": Color(0.90, 0.32, 0.26)},
+	SNOW: {"top": Color(0.95, 0.97, 1.0), "side": Color(0.86, 0.89, 0.94), "bottom": Color(0.52, 0.37, 0.23)},
+	CLAY: {"all": Color(0.78, 0.45, 0.30)},
+	CACTUS: {"top": Color(0.42, 0.66, 0.30), "side": Color(0.30, 0.55, 0.24), "bottom": Color(0.42, 0.66, 0.30)},
+	PINE: {"all": Color(0.16, 0.38, 0.26)},
 }
 
 # Each face: outward normal, its four corners, a baked light level and which
@@ -158,15 +222,26 @@ var faces := [
 # ---------------------------------------------------------------- blocks
 
 func idx(x: int, y: int, z: int) -> int:
-	return x + z * W + y * W * D
+	return y + H * (x + z * W)
 
 
 func get_b(x: int, y: int, z: int) -> int:
 	if y < 0:
 		return STONE
-	if x < 0 or z < 0 or x >= W or z >= D or y >= H:
+	if y >= H:
 		return AIR
-	return data[idx(x, y, z)]
+	if _flat:
+		if x < 0 or z < 0 or x >= W or z >= D:
+			return AIR
+		return data[idx(x, y, z)]
+	var k := Vector2i(x >> 4, z >> 4)
+	if k != _last_k:
+		var c = _cdata.get(k)
+		if c == null:
+			c = _ensure_chunk(k)
+		_last_k = k
+		_last_c = c
+	return _last_c[y + H * ((x & 15) + ((z & 15) << 4))]
 
 
 func solid_at(p: Vector3) -> bool:
@@ -178,42 +253,64 @@ func block_at(p: Vector3) -> int:
 
 
 func set_block(x: int, y: int, z: int, b: int) -> void:
-	if x < 0 or z < 0 or x >= W or z >= D or y < 0 or y >= H:
+	if y < 0 or y >= H:
 		return
-	var old := data[idx(x, y, z)]
-	data[idx(x, y, z)] = b
+	var k := Vector2i(x >> 4, z >> 4)
+	get_b(x, y, z)
+	var c: PackedByteArray = _cdata[k]
+	var ci := (x & 15) + ((z & 15) << 4)
+	var old := c[y + H * ci]
+	c[y + H * ci] = b
+	if not is_island_chunk(k):
+		_modified[k] = true
 	if old == VENT:
 		vents.erase(Vector3i(x, y, z))
 	if b == VENT:
 		vents[Vector3i(x, y, z)] = 14
-	if b != AIR and y > col_top[x + z * W]:
-		col_top[x + z * W] = y
+	var top: PackedInt32Array = _ctop[k]
+	if b != AIR and y > top[ci]:
+		top[ci] = y
+	elif b == AIR and y == top[ci]:
+		var t := y
+		while t >= 0 and c[t + H * ci] == AIR:
+			t -= 1
+		top[ci] = t
 	for dx in range(-1, 2):
 		for dz in range(-1, 2):
-			var cx := floori((x + dx) / float(CH))
-			var cz := floori((z + dz) / float(CH))
-			if cx >= 0 and cz >= 0 and cx < W / CH and cz < D / CH:
-				_dirty[Vector2i(cx, cz)] = true
+			var n := Vector2i((x + dx) >> 4, (z + dz) >> 4)
+			if _chunks.has(n):
+				_dirty[n] = true
 
 
 func flush_dirty() -> void:
 	for k in _dirty.keys():
-		var c: Vector2i = k
-		_build_chunk(c.x, c.y)
+		_mesh_main(k)
 	_dirty.clear()
+
+
+func is_island_chunk(k: Vector2i) -> bool:
+	return k.x >= 0 and k.y >= 0 and k.x < W / CH and k.y < D / CH
+
+
+## True inside the handmade island's square (the rest is the wild world).
+func on_island(p: Vector3) -> bool:
+	return p.x >= 0.0 and p.z >= 0.0 and p.x < W and p.z < D
 
 
 func surface_y(x: float, z: float) -> float:
 	var ix := floori(x)
 	var iz := floori(z)
-	var y := H - 1
+	var y := H
 	while y > 0 and get_b(ix, y - 1, iz) == AIR:
 		y -= 1
 	return y + 0.01
 
 
-## "hearthvale", "steppes", "hollow" or "shrine" for a world position.
+## "hearthvale", "steppes", "hollow" or "shrine" for a world position on the
+## island, or the name of the biome (see BIOMES) out in the wild world.
 func region_at(p: Vector3) -> String:
+	if not on_island(p):
+		return BIOMES[_column(floori(p.x), floori(p.z)).y]
 	if in_hollow(p):
 		return "hollow"
 	if in_shrine(p):
@@ -234,9 +331,10 @@ func in_shrine(p: Vector3) -> bool:
 func open_sky(p: Vector3) -> bool:
 	var ix := floori(p.x)
 	var iz := floori(p.z)
-	if ix < 0 or iz < 0 or ix >= W or iz >= D:
+	var top = _ctop.get(Vector2i(ix >> 4, iz >> 4))
+	if top == null:
 		return true
-	return col_top[ix + iz * W] < floori(p.y + 1.0)
+	return top[(ix & 15) + ((iz & 15) << 4)] < floori(p.y + 1.0)
 
 
 ## The updraft lifting a point, as an upward speed (0 when none).
@@ -318,6 +416,9 @@ func height_at(x: int, z: int) -> float:
 
 
 func generate() -> void:
+	_setup_wild()
+	_build_tables()
+	_flat = true
 	_rng.seed = 1337
 	_noise.seed = 1337
 	_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
@@ -384,13 +485,28 @@ func generate() -> void:
 			col_top[x + z * W] = y
 	spawn.y = surface_y(spawn.x, spawn.z)
 
+	# Cut the island into chunks; from here on every block lives in one.
+	for cz in range(D / CH):
+		for cx in range(W / CH):
+			var c := PackedByteArray()
+			var top := PackedInt32Array()
+			for lz in CH:
+				for lx in CH:
+					var i := idx(cx * CH + lx, 0, cz * CH + lz)
+					c.append_array(data.slice(i, i + H))
+					top.append(col_top[(cx * CH + lx) + (cz * CH + lz) * W])
+			_cdata[Vector2i(cx, cz)] = c
+			_ctop[Vector2i(cx, cz)] = top
+	_flat = false
+	data = PackedByteArray()
+
 	_material.vertex_color_use_as_albedo = true
 	_material.vertex_color_is_srgb = true
 	_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	for cz in range(D / CH):
 		for cx in range(W / CH):
-			_build_chunk(cx, cz)
+			_mesh_main(Vector2i(cx, cz))
 
 
 ## Sets a rectangle of the height map to h, blending over a border.
@@ -876,71 +992,152 @@ func _hash3(x: int, y: int, z: int) -> float:
 
 # ---------------------------------------------------------------- meshing
 
-func _build_chunk(cx: int, cz: int) -> void:
+## Fills the lookup tables the mesher uses, so it never touches a
+## Dictionary (it runs on worker threads).
+func _build_tables() -> void:
+	_pal.resize(256 * 3)
+	_glow.resize(256)
+	_glow.fill(0)
+	for b in colors:
+		var pal: Dictionary = colors[b]
+		for k in 3:
+			var kind: String = ["top", "side", "bottom"][k]
+			_pal[b * 3 + k] = pal["all"] if pal.has("all") else pal.get(kind, pal["side"])
+	for b in GLOWING:
+		_glow[b] = 1
+	# For each face: the neighbour's offset in a padded volume (dy, dx, dz),
+	# then per corner the three blocks that darken it.
+	_face_n.clear()
+	_face_ao.clear()
+	for f in faces:
+		var n: Vector3i = f["n"]
+		_face_n.append_array(PackedInt32Array([n.y, n.x, n.z]))
+		var axis := 0 if n.x != 0 else (1 if n.y != 0 else 2)
+		var t1 := (axis + 1) % 3
+		var t2 := (axis + 2) % 3
+		for c in f["c"]:
+			var cv: Vector3i = c
+			var o1 := Vector3i.ZERO
+			var o2 := Vector3i.ZERO
+			o1[t1] = 1 if cv[t1] == 1 else -1
+			o2[t2] = 1 if cv[t2] == 1 else -1
+			for o in [o1, o2, o1 + o2]:
+				var ov: Vector3i = o
+				_face_ao.append_array(PackedInt32Array([ov.y, ov.x, ov.z]))
+
+
+## Builds the mesh arrays for one chunk from a padded volume: (CH + 2)^2
+## columns of H blocks, the chunk plus a one-block border, so faces and
+## shading at the edges are right. Safe to call on a worker thread.
+func _mesh_volume(vol: PackedByteArray, ox: int, oz: int) -> Array:
+	var pw := CH + 2
 	var verts := PackedVector3Array()
 	var cols := PackedColorArray()
 	var inds := PackedInt32Array()
-	var max_y := 0
+	# Per column: how far up it is solid from the bottom, and its top.
+	var floor_y := PackedInt32Array()
+	var top_y := PackedInt32Array()
+	floor_y.resize(pw * pw)
+	top_y.resize(pw * pw)
+	for ci in pw * pw:
+		var base := ci * H
+		var y := 0
+		while y < H and vol[base + y] != AIR:
+			y += 1
+		floor_y[ci] = y
+		var t := H - 1
+		while t >= 0 and vol[base + t] == AIR:
+			t -= 1
+		top_y[ci] = t
+	var sx := H
+	var sz := H * pw
 	for lz in CH:
 		for lx in CH:
-			max_y = maxi(max_y, col_top[(cx * CH + lx) + (cz * CH + lz) * W])
-
-	for y in range(max_y + 1):
-		for lz in CH:
-			for lx in CH:
-				var x := cx * CH + lx
-				var z := cz * CH + lz
-				var b := get_b(x, y, z)
+			var ci := (lx + 1) + (lz + 1) * pw
+			# Blocks below every neighbour's solid floor can't show a face.
+			var y0 := mini(floor_y[ci] - 1, mini(mini(floor_y[ci - 1], floor_y[ci + 1]), mini(floor_y[ci - pw], floor_y[ci + pw])))
+			y0 = maxi(y0, 0)
+			var x := ox + lx
+			var z := oz + lz
+			for y in range(y0, top_y[ci] + 1):
+				var bi := ci * H + y
+				var b := vol[bi]
 				if b == AIR:
 					continue
-				var pal: Dictionary = colors[b]
+				var glow := _glow[b] == 1
 				var jitter := 0.94 + _hash3(x, y, z) * 0.1
-				for f in faces:
-					var n: Vector3i = f["n"]
-					var nx := x + n.x
-					var ny := y + n.y
-					var nz := z + n.z
-					if get_b(nx, ny, nz) != AIR:
+				for f in 6:
+					var ny := y + _face_n[f * 3]
+					if ny < 0:
 						continue
-					var base: Color
-					if pal.has("all"):
-						base = pal["all"]
-					else:
-						base = pal.get(f["kind"], pal["side"])
-					var axis := 0 if n.x != 0 else (1 if n.y != 0 else 2)
-					var t1 := (axis + 1) % 3
-					var t2 := (axis + 2) % 3
-					var shade: float = f["shade"]
+					var ni := bi + _face_n[f * 3] + _face_n[f * 3 + 1] * sx + _face_n[f * 3 + 2] * sz
+					if ny < H and vol[ni] != AIR:
+						continue
+					var fd: Dictionary = faces[f]
+					var shade: float = fd["shade"]
+					var kind := 0 if f == 3 else (2 if f == 2 else 1)
+					var base: Color = _pal[b * 3 + kind]
 					var start := verts.size()
-					for c in f["c"]:
-						var cv: Vector3i = c
+					var corners: Array = fd["c"]
+					for k in 4:
+						var cv: Vector3i = corners[k]
 						verts.append(Vector3(x + cv.x, y + cv.y, z + cv.z))
-						# Ambient occlusion from the three blocks around this corner.
-						var o1 := Vector3i.ZERO
-						var o2 := Vector3i.ZERO
-						o1[t1] = 1 if cv[t1] == 1 else -1
-						o2[t2] = 1 if cv[t2] == 1 else -1
-						var s1 := 1 if get_b(nx + o1.x, ny + o1.y, nz + o1.z) != AIR else 0
-						var s2 := 1 if get_b(nx + o2.x, ny + o2.y, nz + o2.z) != AIR else 0
-						var cc := 1 if get_b(nx + o1.x + o2.x, ny + o1.y + o2.y, nz + o1.z + o2.z) != AIR else 0
-						var ao := 0 if (s1 == 1 and s2 == 1) else 3 - (s1 + s2 + cc)
-						var lit := (1.15 * (0.75 + 0.25 * shade) if b in GLOWING else shade * jitter) * (0.55 + ao * 0.15)
+						var ai := (f * 4 + k) * 9
+						var s1 := _occ(vol, ni, ny, ai, sx, sz)
+						var s2 := _occ(vol, ni, ny, ai + 3, sx, sz)
+						var ao := 0
+						if s1 + s2 < 2:
+							ao = 3 - (s1 + s2 + _occ(vol, ni, ny, ai + 6, sx, sz))
+						var lit := (1.15 * (0.75 + 0.25 * shade) if glow else shade * jitter) * (0.55 + ao * 0.15)
 						cols.append(Color(base.r * lit, base.g * lit, base.b * lit))
 					inds.append_array(PackedInt32Array([start, start + 1, start + 2, start + 2, start + 1, start + 3]))
+	return [verts, cols, inds]
 
-	var key := Vector2i(cx, cz)
-	var mi: MeshInstance3D = _chunks.get(key)
+
+func _occ(vol: PackedByteArray, ni: int, ny: int, ai: int, sx: int, sz: int) -> int:
+	var ay := ny + _face_ao[ai]
+	if ay < 0:
+		return 1
+	if ay >= H:
+		return 0
+	return 1 if vol[ni + _face_ao[ai] + _face_ao[ai + 1] * sx + _face_ao[ai + 2] * sz] != AIR else 0
+
+
+## A padded volume around a chunk from the blocks already in memory.
+func _volume_from_world(k: Vector2i) -> PackedByteArray:
+	var vol := PackedByteArray()
+	for pz in CH + 2:
+		for px in CH + 2:
+			var x := k.x * CH + px - 1
+			var z := k.y * CH + pz - 1
+			var ck := Vector2i(x >> 4, z >> 4)
+			var c = _cdata.get(ck)
+			if c == null:
+				c = _ensure_chunk(ck)
+			var i := H * ((x & 15) + ((z & 15) << 4))
+			vol.append_array(c.slice(i, i + H))
+	return vol
+
+
+## Builds a chunk's mesh right now from the blocks in memory.
+func _mesh_main(k: Vector2i) -> void:
+	_set_mesh(k, _mesh_volume(_volume_from_world(k), k.x * CH, k.y * CH))
+
+
+func _set_mesh(k: Vector2i, arr: Array) -> void:
+	var mi: MeshInstance3D = _chunks.get(k)
 	if mi == null:
 		mi = MeshInstance3D.new()
 		add_child(mi)
-		_chunks[key] = mi
+		_chunks[k] = mi
 	var mesh := ArrayMesh.new()
+	var verts: PackedVector3Array = arr[0]
 	if verts.size() > 0:
 		var arrays := []
 		arrays.resize(Mesh.ARRAY_MAX)
 		arrays[Mesh.ARRAY_VERTEX] = verts
-		arrays[Mesh.ARRAY_COLOR] = cols
-		arrays[Mesh.ARRAY_INDEX] = inds
+		arrays[Mesh.ARRAY_COLOR] = arr[1]
+		arrays[Mesh.ARRAY_INDEX] = arr[2]
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 		mesh.surface_set_material(0, _material)
 	mi.mesh = mesh
@@ -1000,9 +1197,6 @@ func move_entity(e, dt: float) -> float:
 			v.y = 0.0
 	e.vel = v
 	var p: Vector3 = e.pos
-	p.x = clampf(p.x, 0.5, W - 0.5)
-	p.z = clampf(p.z, 0.5, D - 0.5)
-	e.pos = p
 	var ehw: float = e.hw
 	e.grounded = collides(p.x, p.y - 0.05, p.z, ehw, 0.05)
 	return landed
@@ -1057,3 +1251,486 @@ func raycast(o: Vector3, d: Vector3, max_d: float) -> Dictionary:
 			tmz += tdz
 			n = Vector3i(0, 0, -sz)
 	return {}
+
+
+# ---------------------------------------------------------------- the wild world
+
+func _setup_wild() -> void:
+	var specs := [
+		[_n_cont, 0.0016, 4, 11], [_n_temp, 0.0008, 2, 23], [_n_moist, 0.0009, 2, 37],
+		[_n_hills, 0.012, 3, 41], [_n_mount, 0.0021, 3, 53], [_n_ridge, 0.0055, 2, 67],
+	]
+	for sp in specs:
+		var n: FastNoiseLite = sp[0]
+		n.seed = SEED + int(sp[3])
+		n.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+		n.frequency = sp[1]
+		n.fractal_type = FastNoiseLite.FRACTAL_FBM
+		n.fractal_octaves = sp[2]
+	_max_tasks = clampi(OS.get_processor_count() - 1, 1, 6)
+
+
+## Ground height and biome of a wild column: Vector2i(height, biome id).
+## Pure (the same answer every time), so worker threads can call it.
+func _column(x: int, z: int) -> Vector2i:
+	var fx := float(x)
+	var fz := float(z)
+	# A ring of open sea around the island, then land not far beyond it.
+	var ox := maxf(maxf(-fx, fx - W), 0.0)
+	var oz := maxf(maxf(-fz, fz - D), 0.0)
+	var dist := sqrt(ox * ox + oz * oz) + _n_hills.get_noise_2d(fx * 0.3, fz * 0.3) * 18.0
+	var cont := _n_cont.get_noise_2d(fx, fz) + 0.1
+	cont += 0.3 * smoothstep(34.0, 64.0, dist) * (1.0 - smoothstep(140.0, 260.0, dist))
+	cont = lerpf(-0.3, cont, smoothstep(14.0, 44.0, dist))
+
+	var temp := _n_temp.get_noise_2d(fx, fz)
+	var moist := _n_moist.get_noise_2d(fx, fz)
+	var hills := _n_hills.get_noise_2d(fx, fz)
+	var hot := smoothstep(0.08, 0.2, temp)
+	var cold := smoothstep(-0.16, -0.28, temp)
+	var wet := smoothstep(0.02, 0.15, moist)
+	var dry := smoothstep(0.0, -0.13, moist)
+	var w := PackedFloat32Array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+	w[B_DESERT] = hot * dry
+	w[B_BADLANDS] = hot * (1.0 - dry) * (1.0 - wet)
+	w[B_FOREST] = (1.0 - hot) * (1.0 - cold) * wet
+	w[B_TAIGA] = cold * (1.0 - hot)
+	w[B_PLAINS] = maxf(0.0, 1.0 - w[B_DESERT] - w[B_BADLANDS] - w[B_FOREST] - w[B_TAIGA])
+	var hb := PackedFloat32Array([0.0,
+		10.5 + hills * 3.5,                                  # plains
+		11.0 + hills * 5.5,                                  # forest
+		9.5 + absf(hills) * 7.0,                             # dunes
+		11.0 + floorf((hills * 0.5 + 0.5) * 5.0) * 3.5,      # stepped badlands
+		11.0 + hills * 6.0,                                  # taiga
+		0.0])
+	var land := 0.0
+	var sw := 0.0
+	var best := B_PLAINS
+	for b in range(1, 6):
+		land += hb[b] * w[b]
+		sw += w[b]
+		if w[b] > w[best]:
+			best = b
+	land /= maxf(sw, 0.001)
+	# Mountain ranges with sharp ridges.
+	var mount := smoothstep(0.1, 0.38, _n_mount.get_noise_2d(fx, fz))
+	var ridge := 1.0 - absf(_n_ridge.get_noise_2d(fx, fz))
+	land += mount * (5.0 + ridge * ridge * 36.0)
+	var sea := clampf(6.5 + cont * 40.0, 3.0, 6.5)
+	var h := floori(clampf(lerpf(sea, land, smoothstep(0.0, 0.08, cont)), 3.0, H - 12.0))
+	if h < WATER:
+		best = B_SEA
+	elif mount > 0.5 and h > 24:
+		best = B_PEAKS
+	return Vector2i(h, best)
+
+
+## Generates a wild chunk: its blocks, column tops, mesh arrays and the
+## chests inside it. Pure, so it runs on worker threads.
+func _gen_chunk(k: Vector2i, want_mesh: bool) -> Dictionary:
+	var pw := CH + 2
+	var ox := k.x * CH
+	var oz := k.y * CH
+	# Heights for the chunk plus a 3-block border (trees reach over edges).
+	var m := 3
+	var hw := CH + 2 * m
+	var hts := PackedInt32Array()
+	var bio := PackedInt32Array()
+	hts.resize(hw * hw)
+	bio.resize(hw * hw)
+	for hz in hw:
+		for hx in hw:
+			var c := _column(ox - m + hx, oz - m + hz)
+			hts[hx + hz * hw] = c.x
+			bio[hx + hz * hw] = c.y
+	var vol := PackedByteArray()
+	vol.resize(pw * pw * H)
+	vol.fill(AIR)
+	for pz in pw:
+		for px in pw:
+			var hx := px - 1 + m
+			var hz := pz - 1 + m
+			var hi := hx + hz * hw
+			var h := hts[hi]
+			var b := bio[hi]
+			var slope := maxi(maxi(absi(hts[hi + 1] - h), absi(hts[hi - 1] - h)), maxi(absi(hts[hi + hw] - h), absi(hts[hi - hw] - h)))
+			var base := (px + pz * pw) * H
+			var x := ox + px - 1
+			var z := oz + pz - 1
+			for y in range(h + 1):
+				vol[base + y] = _layer(b, h, y, slope, x, z)
+	# Trees, cacti and Skyglass.
+	for hz in range(1, hw - 1):
+		for hx in range(1, hw - 1):
+			var hi := hx + hz * hw
+			var h := hts[hi]
+			var b := bio[hi]
+			if h <= WATER + 1 or h > H - 14:
+				continue
+			var x := ox - m + hx
+			var z := oz - m + hz
+			var r := _hash3(x, 91, z)
+			var slope := maxi(maxi(absi(hts[hi + 1] - h), absi(hts[hi - 1] - h)), maxi(absi(hts[hi + hw] - h), absi(hts[hi - hw] - h)))
+			if slope > 1:
+				continue
+			match b:
+				B_FOREST:
+					if r < 0.05:
+						_stamp_oak(vol, ox, oz, x, h, z, 5 if _hash3(x, 92, z) > 0.6 else 4)
+				B_PLAINS:
+					if r < 0.006:
+						_stamp_oak(vol, ox, oz, x, h, z, 4)
+				B_TAIGA:
+					if r < 0.035:
+						_stamp_pine(vol, ox, oz, x, h, z)
+				B_PEAKS:
+					if r < 0.012 and h < 38:
+						_stamp_pine(vol, ox, oz, x, h, z)
+				B_DESERT:
+					if r < 0.005:
+						for y in range(1, 2 + floori(_hash3(x, 93, z) * 3.0)):
+							_vset(vol, ox, oz, x, h + y, z, CACTUS)
+					elif r > 0.997:
+						_stamp_skyglass(vol, ox, oz, x, h, z)
+				B_BADLANDS:
+					if r > 0.996:
+						_stamp_skyglass(vol, ox, oz, x, h, z)
+	var chests_in: Array = []
+	_stamp_ruins(vol, ox, oz, chests_in)
+	_stamp_sky_isles(vol, ox, oz, chests_in)
+	# The chunk's own blocks and column tops, out of the padded volume.
+	var c := PackedByteArray()
+	var top := PackedInt32Array()
+	for lz in CH:
+		for lx in CH:
+			var i := ((lx + 1) + (lz + 1) * pw) * H
+			c.append_array(vol.slice(i, i + H))
+			var t := H - 1
+			while t >= 0 and vol[i + t] == AIR:
+				t -= 1
+			top.append(t)
+	var res := {"key": k, "data": c, "top": top, "chests": chests_in}
+	if want_mesh:
+		res["mesh"] = _mesh_volume(vol, ox, oz)
+	return res
+
+
+## The block at height y of a wild column whose ground is at h.
+func _layer(b: int, h: int, y: int, slope: int, x: int, z: int) -> int:
+	if h <= WATER + 1:
+		return SAND if y > h - 3 else STONE
+	var depth := h - y
+	match b:
+		B_DESERT:
+			return SAND if depth < 4 else STONE
+		B_BADLANDS:
+			if depth == 0 and slope <= 1 and _hash3(x, 5, z) > 0.3:
+				return DRYGRASS
+			if depth < 12:
+				return SAND if (y / 2) % 3 == 0 else CLAY
+			return STONE
+		B_TAIGA:
+			if depth == 0:
+				return STONE if slope >= 3 else SNOW
+			return DIRT if depth < 3 else STONE
+		B_PEAKS:
+			if depth == 0:
+				if h >= 40 and slope < 4:
+					return SNOW
+				return STONE if h > 28 or slope >= 2 else GRASS
+			return STONE if h > 28 or depth >= 3 else DIRT
+	if depth == 0:
+		if slope >= 3 or _hash3(x, 6, z) > 0.985:
+			return STONE
+		return GRASS
+	return DIRT if depth < 3 else STONE
+
+
+## Sets a block in a padded volume if (x, y, z) falls inside it.
+func _vset(vol: PackedByteArray, ox: int, oz: int, x: int, y: int, z: int, b: int, only_air := false) -> void:
+	var px := x - ox + 1
+	var pz := z - oz + 1
+	if px < 0 or pz < 0 or px >= CH + 2 or pz >= CH + 2 or y < 0 or y >= H:
+		return
+	var i := (px + pz * (CH + 2)) * H + y
+	if only_air and vol[i] != AIR:
+		return
+	vol[i] = b
+
+
+func _stamp_oak(vol: PackedByteArray, ox: int, oz: int, x: int, h: int, z: int, th: int) -> void:
+	for y in range(1, th + 1):
+		_vset(vol, ox, oz, x, h + y, z, LOG)
+	var top := h + th
+	for dy in range(-2, 2):
+		var r := 1 if dy >= 0 else 2
+		for dx in range(-r, r + 1):
+			for dz in range(-r, r + 1):
+				if absi(dx) == r and absi(dz) == r and _hash3(x + dx, top + dy, z + dz) < 0.6:
+					continue
+				_vset(vol, ox, oz, x + dx, top + dy, z + dz, LEAVES, true)
+	_vset(vol, ox, oz, x, top + 1, z, LEAVES, true)
+
+
+func _stamp_pine(vol: PackedByteArray, ox: int, oz: int, x: int, h: int, z: int) -> void:
+	var th := 6 + floori(_hash3(x, 94, z) * 3.0)
+	for y in range(1, th + 1):
+		_vset(vol, ox, oz, x, h + y, z, LOG)
+	var top := h + th
+	var radii := [2, 1, 2, 1, 1, 0]
+	for i in radii.size():
+		var r: int = radii[i]
+		var y := top - radii.size() + 2 + i
+		for dx in range(-r, r + 1):
+			for dz in range(-r, r + 1):
+				if r == 2 and absi(dx) == 2 and absi(dz) == 2:
+					continue
+				_vset(vol, ox, oz, x + dx, y, z + dz, PINE, true)
+	_vset(vol, ox, oz, x, top + 1, z, PINE, true)
+
+
+func _stamp_skyglass(vol: PackedByteArray, ox: int, oz: int, x: int, h: int, z: int) -> void:
+	for k in 3:
+		var dx := floori(_hash3(x, 95 + k, z) * 3.0) - 1
+		var dz := floori(_hash3(x, 98 + k, z) * 3.0) - 1
+		for y in range(1, 2 + k % 2):
+			_vset(vol, ox, oz, x + dx, h + y, z + dz, SKYGLASS)
+
+
+## Ruins of the Loomwrights: one may stand in each 96-block square of the
+## wild lands. Some are walled courts, some are watchtowers; each keeps a chest.
+func _stamp_ruins(vol: PackedByteArray, ox: int, oz: int, chests_in: Array) -> void:
+	var cell := 96
+	for gz in range(floori((oz - 12) / float(cell)), floori((oz + CH + 12) / float(cell)) + 1):
+		for gx in range(floori((ox - 12) / float(cell)), floori((ox + CH + 12) / float(cell)) + 1):
+			if _hash3(gx, 501, gz) < 0.35:
+				continue
+			var rx := gx * cell + 16 + floori(_hash3(gx, 502, gz) * 64.0)
+			var rz := gz * cell + 16 + floori(_hash3(gx, 503, gz) * 64.0)
+			if rx < ox - 8 or rx > ox + CH + 8 or rz < oz - 8 or rz > oz + CH + 8:
+				continue
+			if rx > -48 and rz > -48 and rx < W + 48 and rz < D + 48:
+				continue
+			var col := _column(rx, rz)
+			if col.y == B_SEA or col.x <= WATER + 1 or col.x > 42:
+				continue
+			if _hash3(gx, 504, gz) < 0.6:
+				_stamp_court(vol, ox, oz, rx, col.x, rz, chests_in)
+			else:
+				_stamp_tower(vol, ox, oz, rx, col.x, rz, chests_in)
+
+
+func _add_chest(vol: PackedByteArray, ox: int, oz: int, p: Vector3i, key: String, chests_in: Array) -> void:
+	_vset(vol, ox, oz, p.x, p.y, p.z, CHEST)
+	if p.x >= ox and p.z >= oz and p.x < ox + CH and p.z < oz + CH:
+		chests_in.append([p, key])
+
+
+func _stamp_court(vol: PackedByteArray, ox: int, oz: int, rx: int, h: int, rz: int, chests_in: Array) -> void:
+	for dz in range(-3, 4):
+		for dx in range(-3, 4):
+			var x := rx + dx
+			var z := rz + dz
+			for y in range(h - 4, h + 1):
+				_vset(vol, ox, oz, x, y, z, BRICKS if y == h else STONE)
+			for y in range(h + 1, h + 7):
+				_vset(vol, ox, oz, x, y, z, AIR)
+			var edge := absi(dx) == 3 or absi(dz) == 3
+			if not edge:
+				continue
+			var corner := absi(dx) == 3 and absi(dz) == 3
+			if corner:
+				for y in range(h + 1, h + 5):
+					_vset(vol, ox, oz, x, y, z, LOOMSTONE)
+				_vset(vol, ox, oz, x, h + 5, z, LOOMVEIN)
+			elif dx != 0 and dz != 0:
+				var wh := floori(_hash3(x, h, z) * 4.0)
+				for y in range(h + 1, h + 1 + wh):
+					_vset(vol, ox, oz, x, y, z, BRICKS if _hash3(x, y, z) > 0.3 else LOOMSTONE)
+	_vset(vol, ox, oz, rx - 1, h + 1, rz, LANTERN)
+	_add_chest(vol, ox, oz, Vector3i(rx, h + 1, rz), "ruin", chests_in)
+
+
+func _stamp_tower(vol: PackedByteArray, ox: int, oz: int, rx: int, h: int, rz: int, chests_in: Array) -> void:
+	var th := 11
+	for dz in range(-2, 3):
+		for dx in range(-2, 3):
+			var x := rx + dx
+			var z := rz + dz
+			var wall := absi(dx) == 2 or absi(dz) == 2
+			for y in range(h - 4, h + th + 1):
+				var b := AIR
+				if y <= h:
+					b = BRICKS
+				elif wall:
+					b = BRICKS
+					# A doorway, a few windows and a broken crown.
+					if dz == -2 and dx == 0 and y <= h + 2:
+						b = AIR
+					elif (y - h) % 4 == 2 and (dx == 0 or dz == 0):
+						b = AIR
+					elif y >= h + th - 1 and _hash3(x, y, z) > 0.55:
+						b = AIR
+				elif y == h + th - 2:
+					b = PLANKS
+				_vset(vol, ox, oz, x, y, z, b)
+	# A ladder up the inside of the north wall to the top floor.
+	for y in range(h + 1, h + th - 1):
+		_vset(vol, ox, oz, rx, y, rz + 1, LADDER)
+	_vset(vol, ox, oz, rx, h + th - 2, rz + 1, AIR)
+	_add_chest(vol, ox, oz, Vector3i(rx - 1, h + th - 1, rz - 1), "tower", chests_in)
+
+
+## Floating isles drift over the wild lands, one in some 144-block squares.
+## Only a glider (or a lot of building) gets you up there.
+func _stamp_sky_isles(vol: PackedByteArray, ox: int, oz: int, chests_in: Array) -> void:
+	var cell := 144
+	for gz in range(floori((oz - 10) / float(cell)), floori((oz + CH + 10) / float(cell)) + 1):
+		for gx in range(floori((ox - 10) / float(cell)), floori((ox + CH + 10) / float(cell)) + 1):
+			if _hash3(gx, 601, gz) < 0.45:
+				continue
+			var cx := gx * cell + 20 + floori(_hash3(gx, 602, gz) * 104.0)
+			var cz := gz * cell + 20 + floori(_hash3(gx, 603, gz) * 104.0)
+			if cx < ox - 10 or cx > ox + CH + 10 or cz < oz - 10 or cz > oz + CH + 10:
+				continue
+			if cx > -40 and cz > -40 and cx < W + 40 and cz < D + 40:
+				continue
+			var ground := _column(cx, cz).x
+			var top := maxi(ground + 16, 36)
+			if top > H - 10:
+				continue
+			var r := 5.0 + _hash3(gx, 604, gz) * 3.0
+			var ri := ceili(r) + 1
+			for dz in range(-ri, ri + 1):
+				for dx in range(-ri, ri + 1):
+					var x := cx + dx
+					var z := cz + dz
+					var d := sqrt(dx * dx + dz * dz) / (r + (_hash3(x, 7, z) - 0.5) * 1.4)
+					if d >= 1.0:
+						continue
+					var depth := 1 + floori((1.0 - d) * 7.0)
+					for y in range(top - depth, top + 1):
+						_vset(vol, ox, oz, x, y, z, GRASS if y == top else (DIRT if y >= top - 2 else STONE))
+			_stamp_oak(vol, ox, oz, cx - 2, top, cz - 1, 4)
+			_add_chest(vol, ox, oz, Vector3i(cx + 1, top + 1, cz + 1), "skyisle", chests_in)
+
+
+## Blocks for a chunk that isn't loaded yet, made right now (used when
+## something touches a chunk before its worker is done).
+func _ensure_chunk(k: Vector2i) -> PackedByteArray:
+	var res := _gen_chunk(k, false)
+	_store(res)
+	return res["data"]
+
+
+func _store(res: Dictionary) -> void:
+	var k: Vector2i = res["key"]
+	_cdata[k] = res["data"]
+	_ctop[k] = res["top"]
+	for ch in res["chests"]:
+		chests[ch[0]] = ch[1]
+
+
+func _task(k: Vector2i) -> void:
+	var res := _gen_chunk(k, true)
+	_mutex.lock()
+	_results.append(res)
+	_mutex.unlock()
+
+
+## Keeps the chunks around `at` loaded: hands new ones to worker threads,
+## puts finished ones in the scene and drops far ones. Call once a frame.
+func stream(at: Vector3, budget_ms := 4.0) -> void:
+	var t0 := Time.get_ticks_usec()
+	var ck := Vector2i(floori(at.x) >> 4, floori(at.z) >> 4)
+	if ck != _center:
+		_center = ck
+		_want.clear()
+		for dz in range(-VIEW, VIEW + 1):
+			for dx in range(-VIEW, VIEW + 1):
+				if dx * dx + dz * dz <= VIEW * VIEW:
+					_want.append(Vector2i(ck.x + dx, ck.y + dz))
+		_want.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+			return (a - ck).length_squared() < (b - ck).length_squared())
+		_all_loaded = false
+
+	# Finished chunks from the workers.
+	_mutex.lock()
+	var done := _results
+	_results = []
+	_mutex.unlock()
+	for res in done:
+		var k: Vector2i = res["key"]
+		WorkerThreadPool.wait_for_task_completion(_pending[k])
+		_pending.erase(k)
+		if (k - _center).length_squared() > (VIEW + 2) * (VIEW + 2) and not _cdata.has(k):
+			continue
+		var touches := false
+		for n in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			if _modified.has(k + n) or is_island_chunk(k + n):
+				touches = true
+		if _modified.has(k):
+			# You changed it while it was on its way: mesh what is there now.
+			if not _main_queue.has(k):
+				_main_queue.append(k)
+			continue
+		# (If something touched it early its blocks are the same as these.)
+		if not _cdata.has(k):
+			_store(res)
+		if touches:
+			_main_queue.append(k)
+		else:
+			_set_mesh(k, res["mesh"])
+
+	# Meshes for chunks whose blocks are known, a few per frame.
+	while not _main_queue.is_empty() and (Time.get_ticks_usec() - t0) < budget_ms * 1000.0:
+		var k: Vector2i = _main_queue.pop_front()
+		if (k - _center).length_squared() <= (VIEW + 1) * (VIEW + 1):
+			_mesh_main(k)
+
+	# New work for the workers, nearest first.
+	if not _all_loaded and _pending.size() < _max_tasks:
+		var all := true
+		for k in _want:
+			if _chunks.has(k) or _pending.has(k) or _main_queue.has(k):
+				continue
+			all = false
+			if _modified.has(k) or is_island_chunk(k):
+				_main_queue.append(k)
+				continue
+			_pending[k] = WorkerThreadPool.add_task(_task.bind(k), false, "chunk")
+			if _pending.size() >= _max_tasks:
+				break
+		_all_loaded = all
+
+	# Drop chunks that are far behind.
+	_unload_t -= 1.0 / 60.0
+	if _unload_t <= 0.0:
+		_unload_t = 1.0
+		var far := (VIEW + 3) * (VIEW + 3)
+		for k in _chunks.keys():
+			var kk: Vector2i = k
+			if is_island_chunk(kk) or (kk - _center).length_squared() <= far:
+				continue
+			var mi: MeshInstance3D = _chunks[kk]
+			mi.queue_free()
+			_chunks.erase(kk)
+		for k in _cdata.keys():
+			var kk: Vector2i = k
+			if is_island_chunk(kk) or _modified.has(kk) or (kk - _center).length_squared() <= far:
+				continue
+			_cdata.erase(kk)
+			_ctop.erase(kk)
+			if _last_k == kk:
+				_last_k = Vector2i(1 << 30, 0)
+
+
+## How many chunks are drawn and how many are still being made.
+func stream_stats() -> Dictionary:
+	return {"meshes": _chunks.size(), "data": _cdata.size(), "pending": _pending.size() + _main_queue.size(), "all_loaded": _all_loaded}
+
+
+func _exit_tree() -> void:
+	for k in _pending:
+		WorkerThreadPool.wait_for_task_completion(_pending[k])
+	_pending.clear()

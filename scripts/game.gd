@@ -97,6 +97,8 @@ var quests := [
 var tracked := 0
 const CACHE_COUNT := 5
 var caches_found := 0
+## Chests opened in ruins and on floating isles out in the wild lands.
+var ruins_found := 0
 var side := [
 	{"id": "enemy", "text": "Defeat a Thornling"},
 	{"id": "shard", "text": "Take the Sky Shard from Needle Rock"},
@@ -127,6 +129,21 @@ const REGIONS := {
 	"steppes": ["Gale Steppes", "Mind the gusts"],
 	"hollow": ["Windworn Hollow", "A Loomwright dungeon"],
 	"shrine": ["Hearthroot Shrine", "A Loomwright shrine"],
+	# The wild lands beyond the island (see World.BIOMES).
+	"sea": ["The Open Sea", "Land lies past the horizon"],
+	"plains": ["Sunmeadow Plains", "Wide grass under a wide sky"],
+	"forest": ["Bramblewood", "Old trees and deep shade"],
+	"desert": ["Amber Dunes", "Sand as far as you can see"],
+	"badlands": ["Rustrock Badlands", "Striped cliffs and dry wind"],
+	"taiga": ["Frostpine Wilds", "Snow under the pines"],
+	"peaks": ["Frostspine Peaks", "Snow, stone and a long way down"],
+}
+## Music and ambience for each region of the wild lands.
+const WILD_AUDIO := {
+	"sea": ["hearthvale", "steppes"], "plains": ["hearthvale", "meadow"],
+	"forest": ["hearthvale", "meadow"], "desert": ["steppes", "steppes"],
+	"badlands": ["steppes", "steppes"], "taiga": ["steppes", "meadow"],
+	"peaks": ["steppes", "steppes"],
 }
 
 var world: World
@@ -177,6 +194,8 @@ var _wren_moved := false
 var _heavy_hint := false
 
 var _beacon: MeshInstance3D
+var _water: MeshInstance3D
+var _sea_floor: MeshInstance3D
 var _beacon_mat: StandardMaterial3D
 var _outline: MeshInstance3D
 var _crack: MeshInstance3D
@@ -194,6 +213,7 @@ func _ready() -> void:
 	audio = Audio.new()
 	add_child(audio)
 
+	_add_wild_items()
 	world = World.new()
 	add_child(world)
 	world.generate()
@@ -207,7 +227,7 @@ func _ready() -> void:
 	camera = Camera3D.new()
 	camera.fov = 72.0
 	camera.near = 0.05
-	camera.far = 400.0
+	camera.far = 260.0
 	add_child(camera)
 	camera.current = true
 
@@ -281,7 +301,11 @@ func _setup_environment() -> void:
 	env.ambient_light_energy = 0.7
 	env.fog_enabled = true
 	env.fog_light_color = sky
-	env.fog_density = 0.01
+	# Depth fog hides where the loaded world ends.
+	env.fog_mode = Environment.FOG_MODE_DEPTH
+	env.fog_depth_begin = 70.0
+	env.fog_depth_end = float(World.VIEW * World.CH) - 8.0
+	env.fog_depth_curve = 1.3
 	var we := WorldEnvironment.new()
 	we.environment = env
 	add_child(we)
@@ -311,6 +335,7 @@ func _add_water() -> void:
 	water.mesh = pm
 	water.position = center + Vector3(0, World.WATER_SURF, 0)
 	add_child(water)
+	_water = water
 
 	var floor_mi := MeshInstance3D.new()
 	var fm := PlaneMesh.new()
@@ -319,6 +344,7 @@ func _add_water() -> void:
 	floor_mi.mesh = fm
 	floor_mi.position = center + Vector3(0, 3.98, 0)
 	add_child(floor_mi)
+	_sea_floor = floor_mi
 
 
 func _make_beacon() -> void:
@@ -366,8 +392,20 @@ func _make_markers() -> void:
 	add_child(_crack)
 
 
-## A random grassy spot away from the player, the camp and the mesas.
+## A random grassy spot away from the player, the camp and the mesas. Out in
+## the wild lands it is somewhere around the player instead.
 func enemy_spot() -> Vector2:
+	if not world.on_island(player.pos):
+		for i in 40:
+			var a := _rng.randf() * TAU
+			var r := 22.0 + _rng.randf() * 20.0
+			var x := player.pos.x + sin(a) * r
+			var z := player.pos.z + cos(a) * r
+			if world.on_island(Vector3(x, 0, z)):
+				continue
+			var y := world.surface_y(x, z)
+			if y > World.WATER + 2.0 and y < 40.0:
+				return Vector2(x, z)
 	for i in 300:
 		var x := 6.0 + _rng.randf() * (World.W - 12)
 		var z := 6.0 + _rng.randf() * (World.D - 12)
@@ -991,6 +1029,11 @@ func _process(delta: float) -> void:
 		_update_gusts(dt)
 		player.update(dt, jump_pressed)
 		for e in enemies:
+			# Thornlings left far behind find their way to wherever you are.
+			if e.alive and e.pos.distance_to(player.pos) > 110.0:
+				e.alive = false
+				e.visible = false
+				e.respawn_t = 3.0 + _rng.randf() * 8.0
 			e.update(dt, world, player, self)
 		_update_interaction(dt)
 		_update_hollow()
@@ -1007,6 +1050,11 @@ func _process(delta: float) -> void:
 	for n in npcs:
 		n.update(dt, player.pos)
 	world.flush_dirty()
+	world.stream(player.pos)
+	_water.position.x = snappedf(player.pos.x, 16.0)
+	_water.position.z = snappedf(player.pos.z, 16.0)
+	_sea_floor.position.x = _water.position.x
+	_sea_floor.position.z = _water.position.z
 	_update_region(dt)
 	_update_vents(dt)
 
@@ -1044,8 +1092,12 @@ func _update_region(dt: float) -> void:
 	if r == region:
 		return
 	region = r
-	audio.play_music(r)
-	audio.play_ambience({"hearthvale": "meadow", "steppes": "steppes", "hollow": "hollow", "shrine": "hollow"}[r])
+	if WILD_AUDIO.has(r):
+		audio.play_music(WILD_AUDIO[r][0])
+		audio.play_ambience(WILD_AUDIO[r][1])
+	else:
+		audio.play_music(r)
+		audio.play_ambience({"hearthvale": "meadow", "steppes": "steppes", "hollow": "hollow", "shrine": "hollow"}[r])
 	if not started:
 		return
 	if not _seen_regions.has(r):
@@ -1227,6 +1279,12 @@ const CHESTS := {
 	"far_mesa": {"items": {"bricks": 8, "lantern": 3, "spring": 1}},
 	"beach": {"items": {"log": 6, "skyglass": 2}},
 }
+## What ruins and floating isles in the wild lands can hold (a few picks each).
+const WILD_LOOT := {
+	"ruin": [["planks", 8], ["bricks", 6], ["lantern", 2], ["skyglass", 2], ["log", 6], ["stick", 6]],
+	"tower": [["skyglass", 3], ["lantern", 3], ["ladder", 4], ["spring", 1], ["bricks", 8]],
+	"skyisle": [["skyglass", 4], ["vent", 1], ["spring", 2], ["lantern", 3]],
+}
 
 
 func _open_chest(bp: Vector3i) -> void:
@@ -1236,6 +1294,8 @@ func _open_chest(bp: Vector3i) -> void:
 	world.set_block(bp.x, bp.y, bp.z, World.CHEST_OPEN)
 	audio.play_at("chest_open", Vector3(bp) + Vector3(0.5, 0.5, 0.5), 0.0, 0.0)
 	var loot: Dictionary = CHESTS.get(key, {})
+	if WILD_LOOT.has(key):
+		loot = {"items": _wild_loot(key, bp)}
 	var got := PackedStringArray()
 	var items_in: Dictionary = loot.get("items", {})
 	for id in items_in:
@@ -1258,6 +1318,10 @@ func _open_chest(bp: Vector3i) -> void:
 		toast("Found " + ", ".join(got))
 	if key == "shrine":
 		complete("shrine_chest")
+	elif WILD_LOOT.has(key):
+		ruins_found += 1
+		if got.is_empty():
+			toast("The chest is empty")
 	elif key != "":
 		caches_found += 1
 		toast("Lost cache %d of %d" % [caches_found, CACHE_COUNT])
@@ -1266,6 +1330,38 @@ func _open_chest(bp: Vector3i) -> void:
 		else:
 			audio.play("goal", -4.0, 0.0)
 		_render_quest()
+
+
+## Two or three picks from a wild chest's loot table, the same for the
+## same chest every game.
+func _wild_loot(key: String, bp: Vector3i) -> Dictionary:
+	var r := RandomNumberGenerator.new()
+	r.seed = hash(bp) + World.SEED
+	var table: Array = WILD_LOOT[key]
+	var out := {}
+	for i in 2 + r.randi_range(0, 1):
+		var pick: Array = table[r.randi_range(0, table.size() - 1)]
+		out[pick[0]] = int(out.get(pick[0], 0)) + int(pick[1])
+	return out
+
+
+## Blocks found only in the wild lands: snow, clay, cactus and pine needles.
+func _add_wild_items() -> void:
+	items["snow"] = {"name": "Snow", "color": Color("eef3fb"), "block": World.SNOW}
+	items["clay"] = {"name": "Clay", "color": Color("c7734c"), "block": World.CLAY}
+	items["cactus"] = {"name": "Cactus", "color": Color("4d8c3d"), "block": World.CACTUS}
+	drops[World.SNOW] = "snow"
+	drops[World.CLAY] = "clay"
+	drops[World.CACTUS] = "cactus"
+	drops[World.PINE] = "leaves"
+	break_time[World.SNOW] = 0.35
+	break_time[World.CLAY] = 0.9
+	break_time[World.CACTUS] = 0.4
+	break_time[World.PINE] = 0.2
+	break_sound[World.SNOW] = "break_soft"
+	break_sound[World.CLAY] = "break_stone"
+	break_sound[World.CACTUS] = "break_leaves"
+	break_sound[World.PINE] = "break_leaves"
 
 
 ## Watches Wren's crossing for a finished bridge (even one built before
