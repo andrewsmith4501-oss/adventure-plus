@@ -3,6 +3,7 @@ extends CanvasLayer
 ## goals, toasts and the start, crafting and knocked-out screens.
 
 signal play_pressed
+signal new_world_pressed
 signal craft_closed
 signal inv_closed
 signal inv_clicked(index: int, button: int, shift: bool)
@@ -58,6 +59,34 @@ class ItemIcon extends Control:
 	# 12x12 pixel art. b = the item's colour, e = a lighter edge,
 	# g = brass guard, h = wooden handle, d = darker shade.
 	const ART := {
+		"lump": [
+			"............",
+			"............",
+			"....eeb.....",
+			"...ebbbbd...",
+			"..ebbdbbbd..",
+			"..ebbbbbbd..",
+			".ebbbbbdbbd.",
+			".ebdbbbbbbd.",
+			"..ebbbbbbd..",
+			"...ddbbdd...",
+			".....dd.....",
+			"............",
+		],
+		"iron": [
+			"............",
+			"............",
+			"............",
+			"....eeeeee..",
+			"...ebbbbbbd.",
+			"..ebbbbbbdd.",
+			".ebbbbbbddd.",
+			".bbbbbbbdd..",
+			".dddddddd...",
+			"............",
+			"............",
+			"............",
+		],
 		"wsword": [
 			"..........ee",
 			".........ebe",
@@ -140,8 +169,12 @@ class ItemIcon extends Control:
 
 	func _draw() -> void:
 		var art_id := id
-		if id == "ssword":
+		if id == "ssword" or id == "isword" or id == "sunsword":
 			art_id = "wsword"
+		elif id == "ipick":
+			art_id = "spick"
+		elif id == "coal" or id == "iron_ore":
+			art_id = "lump"
 		if ART.has(art_id):
 			_pixels(ART[art_id])
 		else:
@@ -252,6 +285,9 @@ var bin_slot: Panel
 var cursor_icon: Control
 var start_title: Label
 var play_button: Button
+var new_world_button: Button
+var save_label: Label
+var _has_save := false
 var screens := {}
 var audio  # audio.gd, for button clicks
 var prompt_label: Label
@@ -503,9 +539,25 @@ func _build_start_screen() -> void:
 	vol.add_child(_label("Sound", 15, ACCENT))
 	vol.add_child(sound_slider)
 	box.add_child(vol)
+	save_label = _label("", 14, INK_DIM, true)
+	save_label.visible = false
+	box.add_child(save_label)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	box.add_child(row)
 	play_button = _button("Play")
+	play_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	play_button.pressed.connect(func() -> void: play_pressed.emit())
-	box.add_child(play_button)
+	row.add_child(play_button)
+	new_world_button = _button("New world")
+	new_world_button.pressed.connect(func() -> void: new_world_pressed.emit())
+	new_world_button.visible = false
+	for st in ["normal", "hover", "pressed"]:
+		var bg := Color("3a423c") if st == "normal" else (Color("4a544d") if st == "hover" else Color("2f3631"))
+		new_world_button.add_theme_stylebox_override(st, _style(bg, 8, 10, 18))
+	for st in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		new_world_button.add_theme_color_override(st, INK)
+	row.add_child(new_world_button)
 
 
 func _slider(value: float) -> HSlider:
@@ -648,7 +700,27 @@ func show_screen(key: String) -> void:
 
 func set_paused_title(paused: bool) -> void:
 	start_title.text = "Paused" if paused else "Adventure Plus"
-	play_button.text = "Resume" if paused else "Play"
+	play_button.text = "Resume" if paused else ("Continue" if _has_save else "Play")
+	new_world_button.text = "New world"
+	if paused:
+		save_label.text = "Your world is saved. It also saves itself every minute or so, and when you close the game."
+		save_label.visible = true
+
+
+## Tells the start screen whether a saved world was loaded.
+func set_save_info(has_save: bool) -> void:
+	_has_save = has_save
+	play_button.text = "Continue" if has_save else "Play"
+	new_world_button.visible = true
+	save_label.visible = has_save
+	save_label.text = "Your saved world is loaded. Continue where you left off, or start a new world." if has_save else ""
+
+
+## The New world button asks once more before throwing a world away.
+func confirm_new_world() -> void:
+	new_world_button.text = "Erase my world?"
+	save_label.text = "Click Erase my world? again to delete your saved world and start over. This can't be undone."
+	save_label.visible = true
 
 
 func set_hearts(hp: int, max_hp := 10) -> void:

@@ -40,6 +40,7 @@ func tp(p: Vector3, yaw: float, pitch := -0.2) -> void:
 
 func _init() -> void:
 	var scene = load("res://main.tscn").instantiate()
+	scene.save_path = ""
 	root.add_child(scene)
 	game = scene
 	steps = [
