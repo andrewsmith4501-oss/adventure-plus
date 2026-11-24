@@ -55,6 +55,11 @@ const SNOW := 31
 const CLAY := 32
 const CACTUS := 33
 const PINE := 34
+# Underground: ores in the stone, and a furnace to smelt them.
+const COAL_ORE := 35
+const IRON_ORE := 36
+const SUNSTONE := 37
+const FURNACE := 38
 
 ## Biomes of the wild lands, by id. region_at() returns these names.
 const BIOMES := ["sea", "plains", "forest", "desert", "badlands", "taiga", "peaks"]
@@ -71,7 +76,11 @@ const UNBREAKABLE := [LOOMSTONE, LOOMVEIN, LOOMDOOR, PLATE, PLATE_ON, NODE, NODE
 ## Blocks too smooth to climb.
 const UNCLIMBABLE := [LOOMSTONE, LOOMVEIN, LOOMDOOR]
 ## Blocks drawn at full brightness.
-const GLOWING := [CRYSTAL, LOOMVEIN, SKYGLASS, LOOMDOOR, NODE_ON, PLATE_ON, VENT, LANTERN, SPRING]
+const GLOWING := [CRYSTAL, LOOMVEIN, SKYGLASS, LOOMDOOR, NODE_ON, PLATE_ON, VENT, LANTERN, SPRING, SUNSTONE]
+## Ores are drawn as stone with flecks of their own colour.
+const ORES := [COAL_ORE, IRON_ORE, SUNSTONE]
+## Blocks that let light through to what is below (for cave shading).
+const SEE_THROUGH := [AIR, LEAVES, PINE, CACTUS, FLAG]
 
 # Where the Gale Steppes start (the cliff line wobbles around this x).
 const STEPPE_X := 94
@@ -158,11 +167,22 @@ var _n_moist := FastNoiseLite.new()
 var _n_hills := FastNoiseLite.new()
 var _n_mount := FastNoiseLite.new()
 var _n_ridge := FastNoiseLite.new()
+# Caves: two noises whose zero sheets cross in winding tunnels, and a third
+# for wide caverns.
+var _n_cave_a := FastNoiseLite.new()
+var _n_cave_b := FastNoiseLite.new()
+var _n_cavern := FastNoiseLite.new()
+## Every block the player (or a puzzle) changed since the world was made:
+## Vector2i chunk -> {index in the chunk: block}. This is what a save keeps.
+var _edits := {}
 var _rng := RandomNumberGenerator.new()
 var _material := StandardMaterial3D.new()
 # Lookup tables for meshing on worker threads (read only once built).
 var _pal := PackedColorArray()
+## Per block: 1 glows, 2 is an ore (drawn speckled), 3 both.
 var _glow := PackedByteArray()
+## Per block: 1 if light passes through it (for cave shading).
+var _see := PackedByteArray()
 var _face_n := PackedInt32Array()
 var _face_ao := PackedInt32Array()
 
@@ -205,6 +225,10 @@ var colors := {
 	CLAY: {"all": Color(0.78, 0.45, 0.30)},
 	CACTUS: {"top": Color(0.42, 0.66, 0.30), "side": Color(0.30, 0.55, 0.24), "bottom": Color(0.42, 0.66, 0.30)},
 	PINE: {"all": Color(0.16, 0.38, 0.26)},
+	COAL_ORE: {"all": Color(0.12, 0.12, 0.14)},
+	IRON_ORE: {"all": Color(0.88, 0.58, 0.38)},
+	SUNSTONE: {"all": Color(0.92, 0.62, 0.20)},
+	FURNACE: {"top": Color(0.40, 0.40, 0.43), "side": Color(0.48, 0.47, 0.48), "bottom": Color(0.36, 0.36, 0.38)},
 }
 
 # Each face: outward normal, its four corners, a baked light level and which
@@ -260,9 +284,14 @@ func set_block(x: int, y: int, z: int, b: int) -> void:
 	var c: PackedByteArray = _cdata[k]
 	var ci := (x & 15) + ((z & 15) << 4)
 	var old := c[y + H * ci]
+	if old == b:
+		return
 	c[y + H * ci] = b
 	if not is_island_chunk(k):
 		_modified[k] = true
+	if not _edits.has(k):
+		_edits[k] = {}
+	_edits[k][y + H * ci] = b
 	if old == VENT:
 		vents.erase(Vector3i(x, y, z))
 	if b == VENT:
@@ -459,6 +488,8 @@ func generate() -> void:
 						b = top_block
 				elif y > h - 3:
 					b = SAND if h <= WATER + 1 else (STONE if h > 30 else DIRT)
+				if b == STONE:
+					b = _ore(x, y, z, h - y)
 				data[idx(x, y, z)] = b
 
 	_plant_trees()
@@ -1005,6 +1036,12 @@ func _build_tables() -> void:
 			_pal[b * 3 + k] = pal["all"] if pal.has("all") else pal.get(kind, pal["side"])
 	for b in GLOWING:
 		_glow[b] = 1
+	_see.resize(256)
+	_see.fill(0)
+	for b in SEE_THROUGH:
+		_see[b] = 1
+	for b in ORES:
+		_glow[b] = 2 if _glow[b] == 0 else 3
 	# For each face: the neighbour's offset in a padded volume (dy, dx, dz),
 	# then per corner the three blocks that darken it.
 	_face_n.clear()
@@ -1039,6 +1076,11 @@ func _mesh_volume(vol: PackedByteArray, ox: int, oz: int) -> Array:
 	var top_y := PackedInt32Array()
 	floor_y.resize(pw * pw)
 	top_y.resize(pw * pw)
+	# Per block of each column: the height of the first block above it that
+	# keeps out the light (H for open sky). Faces that look into a space
+	# with a low roof (a cave, a tunnel, under a house) are drawn darker.
+	var roof := PackedInt32Array()
+	roof.resize(pw * pw * H)
 	for ci in pw * pw:
 		var base := ci * H
 		var y := 0
@@ -1049,8 +1091,17 @@ func _mesh_volume(vol: PackedByteArray, ox: int, oz: int) -> Array:
 		while t >= 0 and vol[base + t] == AIR:
 			t -= 1
 		top_y[ci] = t
+		var r := H
+		for yy in range(mini(t + 1, H - 1), -1, -1):
+			roof[base + yy] = r
+			if _see[vol[base + yy]] == 0:
+				r = yy
+	# Loomwright puzzle rooms keep their full light.
+	var bright_room := ox + CH > HOLLOW_X0 - 2 and ox < HOLLOW_X1 + 2 and oz + CH > HOLLOW_Z0 - 2 and oz < HOLLOW_Z1 + 2
+	bright_room = bright_room or (ox + CH > SHRINE_X0 - 2 and ox < SHRINE_X1 + 2 and oz + CH > SHRINE_Z0 - 2 and oz < SHRINE_Z1 + 2)
 	var sx := H
 	var sz := H * pw
+	var lits := PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
 	for lz in CH:
 		for lx in CH:
 			var ci := (lx + 1) + (lz + 1) * pw
@@ -1059,12 +1110,14 @@ func _mesh_volume(vol: PackedByteArray, ox: int, oz: int) -> Array:
 			y0 = maxi(y0, 0)
 			var x := ox + lx
 			var z := oz + lz
+			var in_room := bright_room and ((x >= HOLLOW_X0 - 1 and x <= HOLLOW_X1 + 1 and z >= HOLLOW_Z0 - 1 and z <= HOLLOW_Z1 + 1) or (x >= SHRINE_X0 - 1 and x <= SHRINE_X1 + 1 and z >= SHRINE_Z0 - 1 and z <= SHRINE_Z1 + 1))
 			for y in range(y0, top_y[ci] + 1):
 				var bi := ci * H + y
 				var b := vol[bi]
 				if b == AIR:
 					continue
-				var glow := _glow[b] == 1
+				var glow := (_glow[b] & 1) == 1
+				var ore := (_glow[b] & 2) == 2
 				var jitter := 0.94 + _hash3(x, y, z) * 0.1
 				for f in 6:
 					var ny := y + _face_n[f * 3]
@@ -1077,20 +1130,64 @@ func _mesh_volume(vol: PackedByteArray, ox: int, oz: int) -> Array:
 					var shade: float = fd["shade"]
 					var kind := 0 if f == 3 else (2 if f == 2 else 1)
 					var base: Color = _pal[b * 3 + kind]
-					var start := verts.size()
+					# How much daylight reaches the space this face looks into.
+					var day := 1.0
+					if ny < H and not in_room:
+						var nci := ci + _face_n[f * 3 + 1] + _face_n[f * 3 + 2] * pw
+						if ny <= top_y[nci]:
+							var gap := roof[nci * H + ny] - ny
+							if gap < H:
+								day = lerpf(0.5, 1.0, clampf((gap - 4) / 10.0, 0.0, 1.0))
+					# Shade underground is a little cool and blue.
+					var cool := 1.0 - day
+					base = Color(base.r * (1.0 - cool * 0.12), base.g * (1.0 - cool * 0.04), base.b * (1.0 + cool * 0.22))
 					var corners: Array = fd["c"]
 					for k in 4:
-						var cv: Vector3i = corners[k]
-						verts.append(Vector3(x + cv.x, y + cv.y, z + cv.z))
 						var ai := (f * 4 + k) * 9
 						var s1 := _occ(vol, ni, ny, ai, sx, sz)
 						var s2 := _occ(vol, ni, ny, ai + 3, sx, sz)
 						var ao := 0
 						if s1 + s2 < 2:
 							ao = 3 - (s1 + s2 + _occ(vol, ni, ny, ai + 6, sx, sz))
-						var lit := (1.15 * (0.75 + 0.25 * shade) if glow else shade * jitter) * (0.55 + ao * 0.15)
-						cols.append(Color(base.r * lit, base.g * lit, base.b * lit))
-					inds.append_array(PackedInt32Array([start, start + 1, start + 2, start + 2, start + 1, start + 3]))
+						if glow:
+							lits[k] = 1.15 * (0.75 + 0.25 * shade) * (0.55 + ao * 0.15)
+						else:
+							lits[k] = shade * jitter * (0.55 + ao * 0.15) * day
+					var c0: Vector3i = corners[0]
+					var p0 := Vector3(x + c0.x, y + c0.y, z + c0.z)
+					if not ore:
+						var start := verts.size()
+						for k in 4:
+							var cv: Vector3i = corners[k]
+							verts.append(Vector3(x + cv.x, y + cv.y, z + cv.z))
+							cols.append(Color(base.r * lits[k], base.g * lits[k], base.b * lits[k]))
+						inds.append_array(PackedInt32Array([start, start + 1, start + 2, start + 2, start + 1, start + 3]))
+						continue
+					# Ores: a 3 x 3 grid of stone with flecks of the ore.
+					var c1: Vector3i = corners[1]
+					var c2: Vector3i = corners[2]
+					var du := Vector3(c2 - c0)
+					var dv := Vector3(c1 - c0)
+					var stone: Color = _pal[STONE * 3 + kind]
+					stone = Color(stone.r * (1.0 - cool * 0.12), stone.g * (1.0 - cool * 0.04), stone.b * (1.0 + cool * 0.22))
+					for i in 4:
+						for j in 4:
+							var fh := _hash3(x * 7 + i * 13 + f * 3, y * 11 + j * 17 + f * 5, z * 5 + i * 29 + j * 31)
+							# Flecks keep off the block's rim, so ores read as ore, not checks.
+							var inner := i > 0 and i < 3 and j > 0 and j < 3
+							var fleck := fh > (0.3 if inner else 0.85)
+							var col: Color = base if fleck else stone
+							var gl := 1.0
+							var start := verts.size()
+							for k in 4:
+								var u := (i + (1 if k >= 2 else 0)) / 4.0
+								var v := (j + (k & 1)) / 4.0
+								verts.append(p0 + du * u + dv * v)
+								var l := lerpf(lerpf(lits[0], lits[2], u), lerpf(lits[1], lits[3], u), v) * gl
+								if glow and not fleck:
+									l = l / 1.15 * day
+								cols.append(Color(col.r * l, col.g * l, col.b * l))
+							inds.append_array(PackedInt32Array([start, start + 1, start + 2, start + 2, start + 1, start + 3]))
 	return [verts, cols, inds]
 
 
@@ -1259,6 +1356,7 @@ func _setup_wild() -> void:
 	var specs := [
 		[_n_cont, 0.0016, 4, 11], [_n_temp, 0.0008, 2, 23], [_n_moist, 0.0009, 2, 37],
 		[_n_hills, 0.012, 3, 41], [_n_mount, 0.0021, 3, 53], [_n_ridge, 0.0055, 2, 67],
+		[_n_cave_a, 0.035, 1, 71], [_n_cave_b, 0.035, 1, 73], [_n_cavern, 0.028, 2, 79],
 	]
 	for sp in specs:
 		var n: FastNoiseLite = sp[0]
@@ -1358,7 +1456,11 @@ func _gen_chunk(k: Vector2i, want_mesh: bool) -> Dictionary:
 			var x := ox + px - 1
 			var z := oz + pz - 1
 			for y in range(h + 1):
-				vol[base + y] = _layer(b, h, y, slope, x, z)
+				var blk := _layer(b, h, y, slope, x, z)
+				if blk == STONE:
+					blk = _ore(x, y, z, h - y)
+				vol[base + y] = blk
+			_carve_column(vol, base, x, z, h)
 	# Trees, cacti and Skyglass.
 	for hz in range(1, hw - 1):
 		for hx in range(1, hw - 1):
@@ -1371,7 +1473,7 @@ func _gen_chunk(k: Vector2i, want_mesh: bool) -> Dictionary:
 			var z := oz - m + hz
 			var r := _hash3(x, 91, z)
 			var slope := maxi(maxi(absi(hts[hi + 1] - h), absi(hts[hi - 1] - h)), maxi(absi(hts[hi + hw] - h), absi(hts[hi - hw] - h)))
-			if slope > 1:
+			if slope > 1 or _carved(x, h, z, h):
 				continue
 			match b:
 				B_FOREST:
@@ -1444,6 +1546,51 @@ func _layer(b: int, h: int, y: int, slope: int, x: int, z: int) -> int:
 			return STONE
 		return GRASS
 	return DIRT if depth < 3 else STONE
+
+
+## Stone deep enough down can hold ore: coal in clumps near the surface,
+## iron a little deeper, and rare glowing Sunstone deep inside hills and
+## mountains. Pure, so worker threads can call it.
+func _ore(x: int, y: int, z: int, depth: int) -> int:
+	if depth < 2:
+		return STONE
+	var r := _hash3(x, y + 300, z)
+	if depth >= 10 and _hash3(x >> 1, (y >> 1) + 800, z >> 1) < 0.0015 and r < 0.6:
+		return SUNSTONE
+	var cell := _hash3(x >> 2, (y >> 2) + 700, z >> 2)
+	if depth >= 4 and cell > 0.96 and r < 0.32:
+		return IRON_ORE
+	if cell < 0.07 and r < 0.38:
+		return COAL_ORE
+	return STONE
+
+
+## True where a cave runs through the ground of a column whose surface is
+## at h. Winding tunnels (they break out on hillsides, which makes cave
+## mouths) and, deeper down, wide caverns. Caves stay above the sea level
+## so they are always dry. Pure, so worker threads can call it.
+func _carved(x: int, y: int, z: int, h: int) -> bool:
+	if y < WATER + 2 or h <= WATER + 3:
+		return false
+	var depth := h - y
+	if depth < 3 and h < 16:
+		return false
+	var fy := y * 1.8
+	var a := _n_cave_a.get_noise_3d(x, fy, z)
+	if absf(a) < 0.1:
+		var b := _n_cave_b.get_noise_3d(x, fy, z)
+		if a * a + b * b < 0.01:
+			return true
+	if depth >= 6 and _n_cavern.get_noise_3d(x, y * 2.2, z) > 0.55:
+		return true
+	return false
+
+
+## Cuts the caves out of one column of a padded volume.
+func _carve_column(vol: PackedByteArray, base: int, x: int, z: int, h: int) -> void:
+	for y in range(WATER + 2, h + 1):
+		if _carved(x, y, z, h):
+			vol[base + y] = AIR
 
 
 ## Sets a block in a padded volume if (x, y, z) falls inside it.
@@ -1629,6 +1776,60 @@ func _store(res: Dictionary) -> void:
 	_ctop[k] = res["top"]
 	for ch in res["chests"]:
 		chests[ch[0]] = ch[1]
+	if _edits.has(k):
+		_apply_edits(k)
+
+
+## Puts the saved changes back into a chunk's blocks (after it was made
+## fresh from the seed, which gives the same blocks every time).
+func _apply_edits(k: Vector2i) -> void:
+	var c: PackedByteArray = _cdata[k]
+	var top: PackedInt32Array = _ctop[k]
+	var e: Dictionary = _edits[k]
+	for i in e:
+		var b: int = e[i]
+		var old := c[i]
+		c[i] = b
+		var ci: int = i / H
+		var y: int = i % H
+		var p := Vector3i(k.x * CH + (ci & 15), y, k.y * CH + (ci >> 4))
+		if old == VENT:
+			vents.erase(p)
+		if b == VENT:
+			vents[p] = 14
+	for ci in CH * CH:
+		var t := H - 1
+		while t >= 0 and c[t + H * ci] == AIR:
+			t -= 1
+		top[ci] = t
+
+
+# ---------------------------------------------------------------- saving
+
+## Every change made to the world, ready for a save file.
+func get_edits() -> Dictionary:
+	return _edits.duplicate(true)
+
+
+## Brings back the changes from a save. Call right after generate(): the
+## island's chunks change now, wild ones as they load.
+func load_edits(edits: Dictionary) -> void:
+	_edits = {}
+	for k in edits:
+		var kk: Vector2i = k
+		var e: Dictionary = edits[k]
+		_edits[kk] = e.duplicate()
+		if not is_island_chunk(kk):
+			_modified[kk] = true
+		if _cdata.has(kk):
+			_apply_edits(kk)
+			if _chunks.has(kk):
+				_dirty[kk] = true
+			for n in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				if _chunks.has(kk + n):
+					_dirty[kk + n] = true
+	_last_k = Vector2i(1 << 30, 0)
+	flush_dirty()
 
 
 func _task(k: Vector2i) -> void:

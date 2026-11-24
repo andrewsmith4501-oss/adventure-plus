@@ -29,9 +29,18 @@ var items := {
 	"stick": {"name": "Stick", "color": Color("a07a48")},
 	"wsword": {"name": "Wooden Sword", "color": Color("d6b27a"), "damage": 2},
 	"ssword": {"name": "Stone Sword", "color": Color("a9adb6"), "damage": 3},
-	"spick": {"name": "Stone Pick", "color": Color("7f848c"), "pick": true},
+	"spick": {"name": "Stone Pick", "color": Color("7f848c"), "pick": 1},
 	"glider": {"name": "Leaf Glider", "color": Color("5fbf4f")},
 	"shard": {"name": "Sky Shard", "color": Color("79f0ff")},
+	# Found underground.
+	"coal": {"name": "Coal", "color": Color("3a3a40")},
+	"iron_ore": {"name": "Iron Ore", "color": Color("c98a62")},
+	"iron": {"name": "Iron Ingot", "color": Color("d8dce2")},
+	"sunstone": {"name": "Sunstone", "color": Color("ffbe48"), "block": World.SUNSTONE},
+	"furnace": {"name": "Furnace", "color": Color("6e6d70"), "block": World.FURNACE},
+	"ipick": {"name": "Iron Pick", "color": Color("d8dce2"), "pick": 2},
+	"isword": {"name": "Iron Sword", "color": Color("d8dce2"), "damage": 4},
+	"sunsword": {"name": "Sunstone Sword", "color": Color("ffc85a"), "damage": 6},
 }
 var drops := {
 	World.GRASS: "dirt", World.DRYGRASS: "dirt", World.DIRT: "dirt", World.STONE: "stone",
@@ -39,19 +48,30 @@ var drops := {
 	World.CRYSTAL: "shard", World.SKYGLASS: "skyglass", World.VENT: "vent",
 	World.WORKBENCH: "workbench", World.LADDER: "ladder", World.SPRING: "spring",
 	World.BRICKS: "bricks", World.THATCH: "thatch", World.LANTERN: "lantern",
+	World.COAL_ORE: "coal", World.IRON_ORE: "iron_ore", World.SUNSTONE: "sunstone",
+	World.FURNACE: "furnace",
 }
 var break_time := {
 	World.GRASS: 0.5, World.DRYGRASS: 0.5, World.DIRT: 0.45, World.SAND: 0.4, World.LOG: 0.9,
 	World.LEAVES: 0.2, World.PLANKS: 0.7, World.STONE: 2.4, World.CRYSTAL: 1.2,
 	World.SKYGLASS: 1.0, World.VENT: 0.8, World.WORKBENCH: 0.8, World.LADDER: 0.4,
 	World.SPRING: 0.6, World.BRICKS: 2.0, World.THATCH: 0.3, World.LANTERN: 0.3, World.FLAG: 0.3,
+	World.COAL_ORE: 2.6, World.IRON_ORE: 3.0, World.SUNSTONE: 3.0, World.FURNACE: 2.0,
 }
+## Blocks a pick mines much faster: seconds with a Stone Pick, an Iron Pick.
+var pick_time := {
+	World.STONE: [0.6, 0.35], World.BRICKS: [0.6, 0.35], World.FURNACE: [0.6, 0.35],
+	World.COAL_ORE: [0.8, 0.45], World.IRON_ORE: [1.0, 0.55], World.SUNSTONE: [1.4, 0.8],
+}
+## Ores that need a pick: 1 = Stone Pick or better, 2 = Iron Pick.
+var pick_needed := {World.IRON_ORE: 1, World.SUNSTONE: 2}
 var break_sound := {
 	World.LOG: "break_wood", World.PLANKS: "break_wood", World.STONE: "break_stone",
 	World.LEAVES: "break_leaves", World.CRYSTAL: "break_glass", World.SKYGLASS: "break_glass",
 	World.VENT: "break_stone", World.WORKBENCH: "break_wood", World.LADDER: "break_wood",
 	World.SPRING: "break_wood", World.BRICKS: "break_stone", World.THATCH: "break_leaves",
-	World.LANTERN: "break_glass",
+	World.LANTERN: "break_glass", World.COAL_ORE: "break_stone", World.IRON_ORE: "break_stone",
+	World.SUNSTONE: "break_glass", World.FURNACE: "break_stone",
 }
 var recipes := [
 	{"out": "planks", "n": 4, "need": {"log": 1}},
@@ -67,7 +87,16 @@ var recipes := [
 	{"out": "lantern", "n": 2, "need": {"stick": 1, "skyglass": 1}, "station": "workbench"},
 	{"out": "ladder", "n": 3, "need": {"stick": 3}, "station": "workbench", "unlock": "wren_recipes"},
 	{"out": "spring", "n": 1, "need": {"planks": 3, "skyglass": 1}, "station": "workbench", "unlock": "wren_recipes"},
+	# Mining: smelt ore at a furnace, then forge better tools.
+	{"out": "lantern", "n": 2, "need": {"stick": 1, "coal": 1}, "station": "workbench"},
+	{"out": "furnace", "n": 1, "need": {"stone": 8}, "station": "workbench"},
+	{"out": "iron", "n": 1, "need": {"iron_ore": 1, "coal": 1}, "station": "furnace"},
+	{"out": "ipick", "n": 1, "need": {"iron": 3, "stick": 2}, "station": "workbench"},
+	{"out": "isword", "n": 1, "need": {"iron": 2, "stick": 1}, "station": "workbench"},
+	{"out": "sunsword", "n": 1, "need": {"sunstone": 2, "iron": 2, "stick": 1}, "station": "workbench"},
 ]
+## Blocks that crafting stations are made of.
+const STATIONS := {"workbench": World.WORKBENCH, "furnace": World.FURNACE}
 
 # Quests. Steps can be finished in any order; the panel shows the tracked
 # quest's finished steps and its next step only. The last step finishes it.
@@ -106,6 +135,10 @@ var side := [
 	{"id": "vent", "text": "Build an updraft vent", "needs": "vent_recipe"},
 	{"id": "caches", "text": "Find the lost caches (read the tablet at camp)"},
 	{"id": "spring", "text": "Launch yourself from a spring pad", "needs": "wren_recipes"},
+	{"id": "cave", "text": "Find a cave in the hills of the wild lands"},
+	{"id": "iron", "text": "Smelt iron ore at a furnace"},
+	{"id": "ipick", "text": "Forge an Iron Pick", "needs": "iron"},
+	{"id": "sunstone", "text": "Mine Sunstone deep under a mountain", "needs": "ipick"},
 ]
 var done := {}
 
@@ -205,6 +238,16 @@ var _break_progress := 0.0
 var _rng := RandomNumberGenerator.new()
 var _time := 0.0
 
+## Where the world is saved. Set to "" before the game is added to the
+## tree to play without saving (the tests do).
+var save_path := "user://world.save"
+const SAVE_VERSION := 1
+const AUTOSAVE_EVERY := 45.0
+var _autosave_t := AUTOSAVE_EVERY
+## True when this game was loaded from a save (the start screen says Continue).
+var loaded_save := false
+var _new_world_armed := false
+
 
 func _ready() -> void:
 	_rng.seed = 99
@@ -278,6 +321,10 @@ func _ready() -> void:
 		enemies.append(e)
 
 	slots.resize(HOTBAR + PACK)
+	hud.new_world_pressed.connect(_new_world)
+	if save_path != "" and FileAccess.file_exists(save_path):
+		loaded_save = load_game()
+	hud.set_save_info(loaded_save)
 	hud.set_hearts(player.hp, player.max_hp)
 	_render_quest()
 	_render_hotbar()
@@ -504,15 +551,18 @@ func near_block(b: int, radius := 4) -> bool:
 
 func _recipe_rows() -> Array:
 	var rows := []
-	var bench := near_block(World.WORKBENCH)
+	var near := {}
+	for st in STATIONS:
+		near[st] = near_block(STATIONS[st])
 	for r in _known_recipes():
 		var out: String = r["out"]
 		var owned: bool = r.get("once", false) and count(out) > 0
 		var ok := not owned
 		var parts := PackedStringArray()
-		if r.get("station", "") == "workbench" and not bench:
+		var station: String = r.get("station", "")
+		if station != "" and not near[station]:
 			ok = false
-			parts.append("[color=#e8564a]Needs a workbench nearby[/color]")
+			parts.append("[color=#e8564a]Needs a %s nearby[/color]" % station)
 		for k in r["need"]:
 			var need: int = r["need"][k]
 			var have := count(k)
@@ -545,6 +595,8 @@ func _craft(i: int) -> void:
 	if r["out"] == "glider":
 		complete("glider")
 		toast("Press Space in mid-air to glide")
+	elif r["out"] == "iron" or r["out"] == "ipick":
+		complete(r["out"])
 	hud.render_recipes(_recipe_rows())
 
 
@@ -801,13 +853,20 @@ func _resume() -> void:
 	hud.show_screen("")
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	running = true
+	_new_world_armed = false
 	if not started:
 		started = true
-		hud.show_banner("Hearthvale", REGIONS["hearthvale"][1])
-		_seen_regions["hearthvale"] = true
+		if loaded_save:
+			var r: String = world.region_at(player.pos + Vector3(0, 0.5, 0))
+			var name: String = REGIONS.get(r, ["Adventure Plus"])[0]
+			hud.show_banner("Welcome back", name)
+		else:
+			hud.show_banner("Hearthvale", REGIONS["hearthvale"][1])
+			_seen_regions["hearthvale"] = true
 
 
 func _pause() -> void:
+	save_game()
 	running = false
 	mouse_down = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -1049,6 +1108,10 @@ func _process(delta: float) -> void:
 		player.update_camera(0.0)
 		hud.set_prompt("")
 	jump_pressed = false
+	if running and not player.dead:
+		_autosave_t -= delta
+		if _autosave_t <= 0.0:
+			save_game()
 	for n in npcs:
 		n.update(dt, player.pos)
 	world.flush_dirty()
@@ -1124,6 +1187,9 @@ func _update_region(dt: float) -> void:
 	if _region_t > 0.0:
 		return
 	_region_t = 0.3
+	if started and not done.has("cave") and not world.on_island(player.pos) and underground():
+		complete("cave")
+		hud.show_banner("Underground", "Dig for coal and iron. Sunstone hides deep under the mountains")
 	var r := world.region_at(player.pos + Vector3(0, 0.5, 0))
 	if r == region:
 		return
@@ -1145,6 +1211,18 @@ func _update_region(dt: float) -> void:
 		complete("hollow")
 	elif r == "shrine":
 		complete("shrine_find")
+
+
+## True when there is a thick roof of rock over the hero's head.
+func underground() -> bool:
+	var x := floori(player.pos.x)
+	var z := floori(player.pos.z)
+	var rock := 0
+	for y in range(floori(player.pos.y) + 2, mini(floori(player.pos.y) + 24, World.H)):
+		var b := world.get_b(x, y, z)
+		if b == World.STONE or b == World.DIRT or b in World.ORES or b == World.SAND or b == World.CLAY:
+			rock += 1
+	return rock >= 4
 
 
 ## Gusts sweep across the Steppes every so often, with a whistle first.
@@ -1621,21 +1699,27 @@ func _update_interaction(dt: float) -> void:
 		var hit: Dictionary = tg["block"]
 		var bp: Vector3i = hit["pos"]
 		var b: int = hit["b"]
+		var it := sel_item()
+		var tier: int = it.get("pick", 0)
 		if b in World.UNBREAKABLE or bp == world.hollow["vent"]:
 			if not _deny_warned:
 				_deny_warned = true
 				audio.play("deny", -4.0)
 				toast("Loomwright stone can't be mined")
+		elif tier < int(pick_needed.get(b, 0)):
+			if not _deny_warned:
+				_deny_warned = true
+				audio.play("deny", -4.0)
+				toast("Too hard: Sunstone needs an Iron Pick" if b == World.SUNSTONE else "Too hard: iron ore needs a Stone Pick")
 		else:
 			breaking = true
 			if bp != _break_key:
 				_break_key = bp
 				_break_progress = 0.0
-			var it := sel_item()
-			var has_pick := not it.is_empty() and it.has("pick")
+			var has_pick := tier > 0
 			var time: float = break_time.get(b, 0.6)
-			if (b == World.STONE or b == World.BRICKS) and has_pick:
-				time = 0.6
+			if has_pick and pick_time.has(b):
+				time = pick_time[b][tier - 1]
 			_break_progress += dt / time
 			if player.swing_t <= 0.0:
 				player.swing_t = 0.3
@@ -1650,8 +1734,14 @@ func _update_interaction(dt: float) -> void:
 					_beacon.visible = false
 					audio.play("pickup", -2.0, 0.0)
 					toast("You found the Sky Shard!")
-				if b == World.SKYGLASS:
+				if b == World.SKYGLASS or b == World.IRON_ORE or b == World.COAL_ORE:
 					audio.play("pickup", -6.0)
+				if b == World.SUNSTONE:
+					audio.play("pickup", -2.0, 0.0)
+					complete("sunstone")
+					toast("Sunstone! It glows on its own, and makes a fine sword")
+				if b == World.IRON_ORE and count("iron") == 0 and not done.has("iron"):
+					toast("Smelt iron ore with coal at a furnace (8 stone, at a workbench)")
 				if b == World.STONE and not has_pick and count("spick") == 0:
 					toast("Tip: a Stone Pick breaks stone much faster")
 				_break_progress = 0.0
@@ -1663,3 +1753,179 @@ func _update_interaction(dt: float) -> void:
 		_break_key = Vector3i(-1, -1, -1)
 		_break_progress = 0.0
 	_crack.visible = breaking
+
+
+# ---------------------------------------------------------------- saving
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		save_game()
+
+
+## Everything needed to pick up where you left off: the world's changed
+## blocks, the hero, the inventory, quests and the puzzles' state.
+func save_data() -> Dictionary:
+	var p := player
+	var pos := p.pos
+	var hp := p.hp
+	if p.dead or hp <= 0:
+		pos = world.spawn
+		hp = p.max_hp
+	var wren_at: Vector3 = wren.pos
+	if wren.walking():
+		wren_at = wren._path[-1]
+		if wren_at.y < 0.0:
+			wren_at.y = world.surface_y(wren_at.x, wren_at.z)
+	var packed := []
+	for s in slots:
+		packed.append(null if s == null else {"id": s["id"], "n": int(s["n"])})
+	var cur = cursor
+	if cur != null:
+		# A stack held on the mouse goes back into the pack.
+		for i in packed.size():
+			if packed[i] == null:
+				packed[i] = {"id": cur["id"], "n": int(cur["n"])}
+				break
+	return {
+		"version": SAVE_VERSION,
+		"seed": World.SEED,
+		"saved_at": Time.get_datetime_string_from_system(),
+		"edits": world.get_edits(),
+		"player": {
+			"pos": pos, "yaw": p.yaw, "cam_yaw": p.cam_yaw, "cam_pitch": p.cam_pitch,
+			"hp": hp, "max_hp": p.max_hp, "max_stamina": p.max_stamina,
+			"wings": p.wings, "first_person": p.first_person,
+		},
+		"slots": packed,
+		"sel": sel,
+		"done": done.keys(),
+		"tracked": tracked,
+		"caches_found": caches_found,
+		"ruins_found": ruins_found,
+		"seen_regions": _seen_regions.keys(),
+		"puzzles": {
+			"door_open": _door_open, "node_restored": _node_restored,
+			"gate1_open": _gate1_open, "gate2_open": _gate2_open, "shrine_node": _shrine_node,
+			"crates": _crates.duplicate(), "wren_moved": _wren_moved, "heavy_hint": _heavy_hint,
+			"plates": _plate_state.duplicate(), "shrine_plates": _shrine_plates.duplicate(),
+		},
+		"npcs": {"bryn": bryn.pos, "wren": wren_at},
+		"volume": {"music": hud.music_slider.value, "sound": hud.sound_slider.value},
+	}
+
+
+## Writes the save file (first to a temporary file, so a crash mid-write
+## never ruins the old save). Returns true if it worked.
+func save_game() -> bool:
+	_autosave_t = AUTOSAVE_EVERY
+	if save_path == "":
+		return false
+	var tmp := save_path + ".tmp"
+	var f := FileAccess.open_compressed(tmp, FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
+	if f == null:
+		push_warning("Could not save the world: %s" % error_string(FileAccess.get_open_error()))
+		return false
+	f.store_var(save_data())
+	f.close()
+	var dir := DirAccess.open(save_path.get_base_dir())
+	if dir == null:
+		return false
+	if dir.file_exists(save_path.get_file()):
+		dir.remove(save_path.get_file())
+	return dir.rename(tmp.get_file(), save_path.get_file()) == OK
+
+
+## Reads the save file and puts everything back. Returns false (and leaves
+## a fresh world) if there is no readable save.
+func load_game() -> bool:
+	var f := FileAccess.open_compressed(save_path, FileAccess.READ, FileAccess.COMPRESSION_ZSTD)
+	if f == null:
+		return false
+	var d = f.get_var()
+	f.close()
+	if typeof(d) != TYPE_DICTIONARY or int(d.get("version", 0)) < 1:
+		push_warning("The save file could not be read; starting a new world")
+		return false
+	apply_save(d)
+	return true
+
+
+func apply_save(d: Dictionary) -> void:
+	world.load_edits(d.get("edits", {}))
+	var pl: Dictionary = d.get("player", {})
+	player.pos = pl.get("pos", world.spawn)
+	player.vel = Vector3.ZERO
+	player.yaw = pl.get("yaw", player.yaw)
+	player.cam_yaw = pl.get("cam_yaw", player.cam_yaw)
+	player.cam_pitch = pl.get("cam_pitch", player.cam_pitch)
+	player.max_hp = pl.get("max_hp", player.max_hp)
+	player.hp = clampi(pl.get("hp", player.max_hp), 1, player.max_hp)
+	player.max_stamina = pl.get("max_stamina", player.max_stamina)
+	player.stamina = player.max_stamina
+	player.first_person = pl.get("first_person", false)
+	if pl.get("wings", false):
+		player.set_wings()
+	slots.fill(null)
+	var saved: Array = d.get("slots", [])
+	for i in mini(saved.size(), slots.size()):
+		var s = saved[i]
+		if s != null and items.has(s["id"]):
+			slots[i] = {"id": s["id"], "n": int(s["n"])}
+	sel = clampi(d.get("sel", 0), 0, HOTBAR - 1)
+	done.clear()
+	for id in d.get("done", []):
+		done[id] = true
+	tracked = clampi(d.get("tracked", 0), 0, quests.size() - 1)
+	caches_found = d.get("caches_found", 0)
+	ruins_found = d.get("ruins_found", 0)
+	for r in d.get("seen_regions", []):
+		_seen_regions[r] = true
+	var pz: Dictionary = d.get("puzzles", {})
+	_door_open = pz.get("door_open", false)
+	_node_restored = pz.get("node_restored", false)
+	_gate1_open = pz.get("gate1_open", false)
+	_gate2_open = pz.get("gate2_open", false)
+	_shrine_node = pz.get("shrine_node", false)
+	_wren_moved = pz.get("wren_moved", false)
+	_heavy_hint = pz.get("heavy_hint", false)
+	var crates: Array = pz.get("crates", [])
+	if crates.size() == _crates.size():
+		_crates = crates.duplicate()
+	var plates: Array = pz.get("plates", [])
+	if plates.size() == _plate_state.size():
+		_plate_state = plates.duplicate()
+	var splates: Array = pz.get("shrine_plates", [])
+	if splates.size() == _shrine_plates.size():
+		_shrine_plates = splates.duplicate()
+	if _node_restored:
+		world.vents[world.hollow["vent"]] = 28
+	if done.has("shard"):
+		_beacon.visible = false
+	var np: Dictionary = d.get("npcs", {})
+	bryn.pos = np.get("bryn", bryn.pos)
+	wren.pos = np.get("wren", wren.pos)
+	var vol: Dictionary = d.get("volume", {})
+	if vol.has("music"):
+		hud.music_slider.value = vol["music"]
+	if vol.has("sound"):
+		hud.sound_slider.value = vol["sound"]
+	_render_quest()
+	_render_hotbar()
+	hud.set_hearts(player.hp, player.max_hp)
+
+
+## The start screen's New world button: asks once more, then throws the
+## save away and starts over.
+func _new_world() -> void:
+	if not _new_world_armed:
+		_new_world_armed = true
+		hud.confirm_new_world()
+		return
+	_new_world_armed = false
+	if save_path != "":
+		var dir := DirAccess.open(save_path.get_base_dir())
+		if dir != null and dir.file_exists(save_path.get_file()):
+			dir.remove(save_path.get_file())
+	# Don't let the old game save itself again on the way out.
+	save_path = ""
+	get_tree().reload_current_scene()

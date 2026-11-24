@@ -52,6 +52,7 @@ func tp(x: float, z: float, yaw := 0.0, pitch := -0.25) -> void:
 
 func _init() -> void:
 	var scene = load("res://main.tscn").instantiate()
+	scene.save_path = ""
 	root.add_child(scene)
 	game = scene
 	_run.call_deferred()
