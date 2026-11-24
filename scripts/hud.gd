@@ -12,6 +12,7 @@ signal craft_requested(index: int)
 signal music_volume_changed(value: float)
 signal sound_volume_changed(value: float)
 
+const Art = preload("res://scripts/art.gd")
 const ACCENT := Color("f2b84b")
 const INK := Color("f4efe3")
 const INK_DIM := Color("c9c2b0")
@@ -52,112 +53,11 @@ class Ring extends Control:
 
 ## A small picture of an item: a little cube for blocks, pixel art for tools.
 class ItemIcon extends Control:
+	## Pictures rendered from each block item's 3D model: id -> Texture2D.
+	static var baked := {}
 	var id := ""
 	var color := Color.WHITE
 	var is_block := false
-
-	# 12x12 pixel art. b = the item's colour, e = a lighter edge,
-	# g = brass guard, h = wooden handle, d = darker shade.
-	const ART := {
-		"lump": [
-			"............",
-			"............",
-			"....eeb.....",
-			"...ebbbbd...",
-			"..ebbdbbbd..",
-			"..ebbbbbbd..",
-			".ebbbbbdbbd.",
-			".ebdbbbbbbd.",
-			"..ebbbbbbd..",
-			"...ddbbdd...",
-			".....dd.....",
-			"............",
-		],
-		"iron": [
-			"............",
-			"............",
-			"............",
-			"....eeeeee..",
-			"...ebbbbbbd.",
-			"..ebbbbbbdd.",
-			".ebbbbbbddd.",
-			".bbbbbbbdd..",
-			".dddddddd...",
-			"............",
-			"............",
-			"............",
-		],
-		"wsword": [
-			"..........ee",
-			".........ebe",
-			"........ebb.",
-			".......ebb..",
-			"......ebb...",
-			".....ebb....",
-			"..g.ebb.....",
-			"...gbb......",
-			"...hgg......",
-			"..hh..g.....",
-			".hh.........",
-			"hh..........",
-		],
-		"spick": [
-			"...eebbbb...",
-			"..eb....bbd.",
-			".eb.....hbbd",
-			".b.....h..bd",
-			"......h....d",
-			".....h......",
-			"....h.......",
-			"...h........",
-			"..h.........",
-			".h..........",
-			"h...........",
-			"............",
-		],
-		"stick": [
-			"..........hh",
-			".........hhd",
-			"........hhd.",
-			".......hhd..",
-			"......hhd...",
-			".....hhd....",
-			"....hhd.....",
-			"...hhd......",
-			"..hhd.......",
-			".hhd........",
-			"hhd.........",
-			"hd..........",
-		],
-		"glider": [
-			"............",
-			"gggggggggggg",
-			"ebbbbbbbbbbe",
-			".ebbbbbbbbe.",
-			"..ebbbbbbe..",
-			"...ebddbe...",
-			"....hddh....",
-			"....h..h....",
-			"....h..h....",
-			"....h..h....",
-			"............",
-			"............",
-		],
-		"shard": [
-			".....ee.....",
-			"....ebbd....",
-			"....ebbd....",
-			"...ebbbbd...",
-			"...ebbbbd...",
-			"..ebbbbbbd..",
-			"..ebbbbbbd..",
-			"...ebbbbd...",
-			"...ebbbbd...",
-			"....ebbd....",
-			"....ebbd....",
-			".....dd.....",
-		],
-	}
 
 	func _init(item_id: String, item: Dictionary) -> void:
 		id = item_id
@@ -168,27 +68,18 @@ class ItemIcon extends Control:
 		custom_minimum_size = size
 
 	func _draw() -> void:
-		var art_id := id
-		if id == "ssword" or id == "isword" or id == "sunsword":
-			art_id = "wsword"
-		elif id == "ipick":
-			art_id = "spick"
-		elif id == "coal" or id == "iron_ore":
-			art_id = "lump"
-		if ART.has(art_id):
-			_pixels(ART[art_id])
+		if baked.has(id):
+			draw_texture_rect(baked[id], Rect2(Vector2(-2, -2), size + Vector2(4, 4)), false)
+			return
+		var rows := Art.art_rows(id)
+		if not is_block and not rows.is_empty():
+			_pixels(rows)
 		else:
 			_cube()
 
 	func _pixels(rows: Array) -> void:
 		var px := size.x / 12.0
-		var pal := {
-			"b": color,
-			"e": color.lightened(0.35),
-			"d": color.darkened(0.35),
-			"g": Color("d9a63a"),
-			"h": Color("7a5432"),
-		}
+		var pal := Art.art_palette(color)
 		# A soft shadow first, then the pixels.
 		for pass_i in 2:
 			for y in rows.size():

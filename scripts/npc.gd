@@ -29,6 +29,14 @@ func _box(size: Vector3, color: Color, at: Vector3, parent: Node3D) -> MeshInsta
 	return mi
 
 
+## Eyes with whites and pupils, and brows, on the head at height y.
+func _eyes(y: float, z: float, brow: Color) -> void:
+	for ex in [-0.08, 0.08]:
+		_box(Vector3(0.07, 0.06, 0.02), Color("f4f1ea"), Vector3(ex, y, z), _head)
+		_box(Vector3(0.035, 0.06, 0.02), Color("2a2a3a"), Vector3(ex + (0.015 if ex < 0 else -0.015), y, z + 0.006), _head)
+		_box(Vector3(0.09, 0.03, 0.02), brow, Vector3(ex, y + 0.06, z + 0.004), _head)
+
+
 func _ready() -> void:
 	if look == "wren":
 		_build_wren()
@@ -48,6 +56,12 @@ func _build_bryn() -> void:
 	for sx in [-0.32, 0.32]:
 		_box(Vector3(0.14, 0.52, 0.16), robe, Vector3(sx, 1.12, 0.02), self)
 		_box(Vector3(0.12, 0.1, 0.12), skin, Vector3(sx, 0.82, 0.04), self)
+	# A satchel with a scroll, and a rope belt.
+	_box(Vector3(0.16, 0.18, 0.08), Color("8a6a3e"), Vector3(-0.2, 0.78, 0.2), self)
+	_box(Vector3(0.05, 0.05, 0.22), Color("efe6cf"), Vector3(-0.2, 0.9, 0.2), self)
+	_box(Vector3(0.06, 0.12, 0.03), Color("f2b84b"), Vector3(0.12, 0.92, 0.18), self)
+	for sx in [-0.32, 0.32]:
+		_box(Vector3(0.16, 0.06, 0.18), trim, Vector3(sx, 0.9, 0.02), self)
 	# Walking staff with a Skyglass tip.
 	_box(Vector3(0.06, 1.7, 0.06), Color("6b4a2b"), Vector3(0.42, 0.85, 0.12), self)
 	_box(Vector3(0.14, 0.14, 0.14), Color("9fd0ff"), Vector3(0.42, 1.74, 0.12), self)
@@ -57,11 +71,19 @@ func _build_bryn() -> void:
 	_box(Vector3(0.34, 0.34, 0.32), skin, Vector3(0, 0.17, 0), _head)
 	_box(Vector3(0.3, 0.24, 0.06), beard, Vector3(0, 0.02, 0.17), _head)
 	_box(Vector3(0.36, 0.1, 0.34), beard, Vector3(0, 0.36, 0), _head)
-	_box(Vector3(0.05, 0.05, 0.02), Color("1d1d1d"), Vector3(-0.08, 0.22, 0.165), _head)
-	_box(Vector3(0.05, 0.05, 0.02), Color("1d1d1d"), Vector3(0.08, 0.22, 0.165), _head)
-	# Wide-brimmed hat.
+	_eyes(0.22, 0.165, beard)
+	# Long beard and a moustache.
+	_box(Vector3(0.24, 0.16, 0.06), beard.darkened(0.05), Vector3(0, -0.12, 0.17), _head)
+	_box(Vector3(0.12, 0.1, 0.05), beard.darkened(0.1), Vector3(0, -0.24, 0.17), _head)
+	_box(Vector3(0.2, 0.04, 0.03), beard, Vector3(0, 0.1, 0.185), _head)
+	_box(Vector3(0.06, 0.06, 0.04), skin.darkened(0.12), Vector3(0, 0.15, 0.18), _head)
+	# Wide-brimmed hat with a gold band and a star.
 	_box(Vector3(0.6, 0.05, 0.6), Color("4a3a5e"), Vector3(0, 0.4, 0), _head)
 	_box(Vector3(0.32, 0.22, 0.32), Color("4a3a5e"), Vector3(0, 0.53, 0), _head)
+	_box(Vector3(0.33, 0.05, 0.33), Color("f2b84b"), Vector3(0, 0.45, 0), _head)
+	_box(Vector3(0.22, 0.14, 0.22), Color("54426b"), Vector3(0, 0.7, -0.03), _head)
+	_box(Vector3(0.12, 0.12, 0.12), Color("54426b"), Vector3(0, 0.8, -0.1), _head)
+	_box(Vector3(0.06, 0.06, 0.02), Color("9fd0ff"), Vector3(0, 0.56, 0.17), _head)
 
 
 func _build_wren() -> void:
@@ -98,7 +120,16 @@ func _build_wren() -> void:
 	_box(Vector3(0.38, 0.05, 0.36), Color("4a3424"), Vector3(0, 0.3, 0), _head)
 	for gx in [-0.08, 0.08]:
 		_box(Vector3(0.11, 0.09, 0.05), brass, Vector3(gx, 0.31, 0.17), _head)
-		_box(Vector3(0.05, 0.05, 0.02), Color("1d1d1d"), Vector3(gx, 0.18, 0.165), _head)
+		_box(Vector3(0.07, 0.06, 0.02), Color("7fd6ff"), Vector3(gx, 0.31, 0.195), _head)
+	_eyes(0.18, 0.165, hair)
+	_box(Vector3(0.06, 0.05, 0.04), skin.darkened(0.12), Vector3(0, 0.13, 0.17), _head)
+	_box(Vector3(0.1, 0.02, 0.02), Color("8a4a3a"), Vector3(0, 0.07, 0.165), _head)
+	for fx in [-0.11, 0.11]:
+		_box(Vector3(0.03, 0.03, 0.01), Color("a8603e"), Vector3(fx, 0.11, 0.163), _head)
+	# Apron pocket with a wrench and a pencil, and work gloves.
+	_box(Vector3(0.2, 0.12, 0.02), apron.darkened(0.15), Vector3(0, 0.86, 0.165), self)
+	_box(Vector3(0.03, 0.14, 0.03), Color("e0b04a"), Vector3(0.05, 0.95, 0.17), self)
+	_box(Vector3(0.04, 0.12, 0.03), Color("9aa0a8"), Vector3(-0.05, 0.94, 0.17), self)
 
 
 ## Walks through these points in order. A point with y < 0 is placed on the
