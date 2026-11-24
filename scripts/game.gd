@@ -83,7 +83,7 @@ var quests := [
 	]},
 	{"title": "A Bridge for Wren", "steps": [
 		{"id": "wren_talk", "text": "Meet Wren by the river, north-east of camp"},
-		{"id": "bridge", "text": "Build a dry bridge between Wren's two flag posts"},
+		{"id": "bridge", "text": "Build a dry bridge across the river by Wren's flag posts"},
 		{"id": "wren_return", "text": "Tell Wren the bridge is ready"},
 	]},
 	{"title": "The Hearthroot Shrine", "steps": [
@@ -138,7 +138,12 @@ var wren: Npc
 var npcs: Array = []
 var camera: Camera3D
 var enemies: Array = []
+## slots[0..8] are the hotbar, slots[9..35] the pack (the rest of the inventory).
 var slots: Array = []
+const HOTBAR := 9
+const PACK := 27
+## The stack picked up with the mouse in the inventory screen, or null.
+var cursor = null
 var sel := 0
 var running := false
 var started := false
@@ -235,6 +240,8 @@ func _ready() -> void:
 	add_child(hud)
 	hud.play_pressed.connect(_resume)
 	hud.craft_closed.connect(_resume)
+	hud.inv_closed.connect(_resume)
+	hud.inv_clicked.connect(_inv_click)
 	hud.respawn_pressed.connect(_respawn)
 	hud.craft_requested.connect(_craft)
 	hud.music_volume_changed.connect(audio.set_music_volume)
@@ -250,7 +257,7 @@ func _ready() -> void:
 		e.place_on_ground(world)
 		enemies.append(e)
 
-	slots.resize(9)
+	slots.resize(HOTBAR + PACK)
 	hud.set_hearts(player.hp, player.max_hp)
 	_render_quest()
 	_render_hotbar()
@@ -398,7 +405,7 @@ func add_item(id: String, n := 1) -> bool:
 			slots[i] = {"id": id, "n": n}
 			_render_hotbar()
 			return true
-	toast("Hotbar full")
+	toast("Inventory full")
 	return false
 
 
@@ -425,7 +432,9 @@ func sel_item() -> Dictionary:
 
 
 func _render_hotbar() -> void:
-	hud.render_hotbar(slots, sel, items)
+	hud.render_hotbar(slots.slice(0, HOTBAR), sel, items)
+	if hud.screens["inv"].visible:
+		hud.render_inventory(slots, cursor, items)
 	player.set_held(sel_item())
 
 
@@ -638,16 +647,25 @@ func _talk_to_bryn() -> void:
 func _talk_to_wren() -> void:
 	if wren.walking():
 		_say("Wren", ["Coming, coming! Carts are slow, and so am I."])
+	elif not done.has("wren_talk") and done.has("bridge"):
+		_say("Wren", [
+			"Oh! Hello there! I'm Wren. I build things: gliders, gadgets, anything with a spring in it.",
+			"My cart's been stuck on this side of the river since the old ford washed out... and you've built a bridge! Did you read my mind?",
+			"Here's my thanks: ladders and spring pads. Craft them at a workbench. Ladders cost no stamina, and they cling to anything, even Loomstone.",
+			"A spring pad flings you into the sky, so open your glider at the top. I'll set up a workbench by Bryn's fire.",
+		], func() -> void:
+			complete("wren_talk")
+			_reward_wren())
 	elif not done.has("wren_talk"):
 		_say("Wren", [
 			"Oh! Hello there! I'm Wren. I build things: gliders, gadgets, anything with a spring in it.",
 			"My cart's stuck on this side of the river. The old ford washed out, and carts don't swim.",
 			"Bryn's camp is just over there, and I'd love to set up shop by the fire. Could you build me a bridge?",
-			"Anything from my flag post to the one across the water. Planks, stone, even dirt. It just has to be dry, with no step taller than one block.",
+			"Anything across the water near my red flags. Planks, stone, even dirt. It just has to be dry, with no step taller than one block.",
 		], func() -> void: complete("wren_talk"))
 	elif not done.has("bridge"):
 		_say("Wren", [
-			"From my red flag to the other one. Keep it above the water and no steps taller than one block, or the cart tips over.",
+			"Across the river, somewhere near my red flags. Keep it above the water and no steps taller than one block, or the cart tips over.",
 		])
 	elif not done.has("wren_return"):
 		_say("Wren", [
@@ -739,6 +757,7 @@ func _respawn() -> void:
 # ---------------------------------------------------------------- pause / screens
 
 func _resume() -> void:
+	_return_cursor()
 	hud.show_screen("")
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	running = true
@@ -765,6 +784,90 @@ func _toggle_craft() -> void:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		hud.render_recipes(_recipe_rows())
 		hud.show_screen("craft")
+
+
+func _toggle_inventory() -> void:
+	if hud.screens["inv"].visible:
+		_resume()
+	elif running and not talking():
+		running = false
+		mouse_down = false
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		hud.render_inventory(slots, cursor, items)
+		hud.show_screen("inv")
+
+
+## Inventory clicks, like a block game: left click picks up or puts down a
+## stack (swapping or merging), right click takes half or puts down one,
+## shift-click moves a stack between the hotbar and the pack. Slot -1 is the bin.
+func _inv_click(i: int, button: int, shift: bool) -> void:
+	if i < 0:
+		if cursor != null:
+			audio.play("break_soft", -6.0)
+			toast("Threw away %d %s" % [cursor["n"], items[cursor["id"]]["name"]])
+			cursor = null
+	else:
+		var st = slots[i]
+		if shift and button == MOUSE_BUTTON_LEFT and cursor == null:
+			if st != null:
+				var to_pack := i < HOTBAR
+				var lo := HOTBAR if to_pack else 0
+				var hi := HOTBAR + PACK if to_pack else HOTBAR
+				var target := -1
+				for j in range(lo, hi):
+					if slots[j] != null and slots[j]["id"] == st["id"]:
+						target = j
+						break
+				if target < 0:
+					for j in range(lo, hi):
+						if slots[j] == null:
+							target = j
+							break
+				if target >= 0:
+					if slots[target] == null:
+						slots[target] = st
+					else:
+						slots[target]["n"] = int(slots[target]["n"]) + int(st["n"])
+					slots[i] = null
+		elif button == MOUSE_BUTTON_LEFT:
+			if cursor == null:
+				cursor = st
+				slots[i] = null
+			elif st == null:
+				slots[i] = cursor
+				cursor = null
+			elif st["id"] == cursor["id"]:
+				st["n"] = int(st["n"]) + int(cursor["n"])
+				cursor = null
+			else:
+				slots[i] = cursor
+				cursor = st
+		elif button == MOUSE_BUTTON_RIGHT:
+			if cursor == null and st != null:
+				var half := ceili(int(st["n"]) / 2.0)
+				cursor = {"id": st["id"], "n": half}
+				st["n"] = int(st["n"]) - half
+				if int(st["n"]) <= 0:
+					slots[i] = null
+			elif cursor != null and (st == null or st["id"] == cursor["id"]):
+				if st == null:
+					slots[i] = {"id": cursor["id"], "n": 1}
+				else:
+					st["n"] = int(st["n"]) + 1
+				cursor["n"] = int(cursor["n"]) - 1
+				if int(cursor["n"]) <= 0:
+					cursor = null
+	audio.play("ui_click", -8.0, 0.05)
+	_render_hotbar()
+
+
+## Puts a stack still held in the inventory screen back into the inventory.
+func _return_cursor() -> void:
+	if cursor == null:
+		return
+	var c: Dictionary = cursor
+	cursor = null
+	add_item(c["id"], c["n"])
 
 
 # ---------------------------------------------------------------- input
@@ -798,15 +901,21 @@ func _unhandled_input(event: InputEvent) -> void:
 		if not k.pressed or k.echo:
 			return
 		var code := k.physical_keycode
-		if code == KEY_C or code == KEY_E:
+		if code == KEY_C:
+			if hud.screens["inv"].visible:
+				_resume()
 			_toggle_craft()
+		elif code == KEY_E or code == KEY_I or code == KEY_TAB:
+			if hud.screens["craft"].visible:
+				_resume()
+			_toggle_inventory()
 		elif code == KEY_ESCAPE:
 			if running and talking():
 				_dialog = []
 				hud.hide_dialog()
 			elif running:
 				_pause()
-			elif hud.screens["craft"].visible:
+			elif hud.screens["craft"].visible or hud.screens["inv"].visible:
 				_resume()
 		elif not running:
 			return
@@ -1159,9 +1268,10 @@ func _open_chest(bp: Vector3i) -> void:
 		_render_quest()
 
 
-## Watches Wren's crossing once you've agreed to build the bridge.
+## Watches Wren's crossing for a finished bridge (even one built before
+## you've met Wren).
 func _update_bridge(dt: float) -> void:
-	if not done.has("wren_talk") or done.has("bridge"):
+	if done.has("bridge"):
 		return
 	_bridge_t -= dt
 	if _bridge_t > 0.0:
@@ -1172,7 +1282,7 @@ func _update_bridge(dt: float) -> void:
 		return
 	if not world.ford_route().is_empty():
 		complete("bridge")
-		toast("Wren: It looks sturdy! Come and tell me.")
+		toast("Wren: It looks sturdy! Come and tell me." if done.has("wren_talk") else "Someone by the river is waving at you")
 
 
 ## Called by the hero when a spring pad launches them.

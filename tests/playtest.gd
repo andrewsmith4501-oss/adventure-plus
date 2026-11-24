@@ -169,15 +169,14 @@ func _init() -> void:
 		[3, func():
 			shot("14_wren_ford")
 			game.player.first_person = false
-			# Build a plank bridge that ramps evenly from one bank to the other.
+			# Build a flat plank bridge high up beside the flag posts, the way a
+			# player might: it doesn't touch the ground on either side.
+			var post_w: Vector3i = game.world.ford["posts"][0]
+			var post_e: Vector3i = game.world.ford["posts"][1]
+			var y: int = post_e.y + 1
+			for x in range(post_w.x + 1, post_e.x):
+				game.world.set_block(x, y, post_w.z + 1, game.world.PLANKS)
 			var a: Vector2i = game.world.ford["a"]
-			var b: Vector2i = game.world.ford["b"]
-			var ya: int = int(game.world.surface_y(a.x, a.y)) - 1
-			var yb: int = int(game.world.surface_y(b.x, b.y)) - 1
-			for x in range(a.x + 1, b.x):
-				var y := maxi(roundi(lerpf(ya, yb, float(x - a.x) / (b.x - a.x))), game.world.WATER)
-				for z in [a.y, a.y + 1]:
-					game.world.set_block(x, y, z, game.world.PLANKS)
 			game.player.pos = Vector3(a.x + 0.5, game.world.surface_y(a.x + 0.5, a.y + 0.5), a.y + 0.5)],
 		[60, func():
 			check(not game.world.ford_route().is_empty(), "the bridge makes a dry route")
@@ -333,7 +332,35 @@ func _init() -> void:
 			check(game.player.wings, "gale wings")
 			check(game.count("bricks") == 8, "bricks from a cache")
 			tp(Vector3(108.5, game.world.surface_y(108.5, 36.5), 36.5), 0.0, 0.1)],
-		[60, func(): shot("27_caches_hud")],
+		[60, func():
+			shot("27_caches_hud")
+			# The inventory: move a stack to the pack and back, split one, bin one.
+			var first = game.slots[0]
+			game._toggle_inventory()
+			check(game.hud.screens["inv"].visible, "inventory screen opens")
+			game._inv_click(0, MOUSE_BUTTON_LEFT, false)
+			check(game.slots[0] == null and game.cursor != null, "picked up hotbar slot 1")
+			game._inv_click(20, MOUSE_BUTTON_LEFT, false)
+			check(game.slots[20] == first and game.cursor == null, "put it in the pack")
+			game._inv_click(20, MOUSE_BUTTON_LEFT, true)
+			check(game.slots[20] == null and game.slots[0] == first, "shift-click moves it back to the hotbar")
+			var bricks := -1
+			for i in game.slots.size():
+				if game.slots[i] != null and game.slots[i]["id"] == "bricks":
+					bricks = i
+			game._inv_click(bricks, MOUSE_BUTTON_RIGHT, false)
+			check(game.cursor != null and game.cursor["n"] == 4 and game.count("bricks") == 4, "right-click takes half the bricks")
+			game._inv_click(30, MOUSE_BUTTON_RIGHT, false)
+			check(game.slots[30] != null and game.slots[30]["n"] == 1, "right-click puts down one")
+			game._inv_click(-1, MOUSE_BUTTON_LEFT, false)
+			check(game.cursor == null and game.count("bricks") == 5, "the bin throws the rest away")
+			game._inv_click(bricks, MOUSE_BUTTON_LEFT, false)
+			game.hud.render_inventory(game.slots, game.cursor, game.items)],
+		[10, func():
+			shot("28_inventory")
+			game._resume()
+			check(game.cursor == null and game.count("bricks") == 5, "closing returns the held stack")
+			check(not game.hud.screens["inv"].visible, "inventory closed")],
 		[1, func():
 			print("RESULT fails=%d" % fails)
 			quit(1 if fails > 0 else 0)],

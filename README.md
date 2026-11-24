@@ -23,6 +23,7 @@ The design lives in the project's design doc. This repository holds the game its
 | 1 to 9, mouse wheel | Choose a hotbar slot |
 | F | Talk, read a tablet, use a Thread Node, open a chest, push a crate (also advances dialogue) |
 | C | Crafting (some recipes need a workbench nearby) |
+| E or I | Inventory: a 27-slot pack plus the hotbar. Click to move stacks, right-click to split, shift-click to swap between pack and hotbar, and a bin to throw things away |
 | Q | Switch which quest is shown on screen |
 | V | Switch between third and first person |
 | Esc | Pause (music and sound volume are on the pause screen) |
@@ -37,7 +38,7 @@ The design lives in the project's design doc. This repository holds the game its
 
 **Quest: The Stilled Wind.** Talk to Bryn, craft a Leaf Glider, climb into the Steppes, find and solve the Hollow, and return. The reward is the Updraft Vent: a block you craft from stone and Skyglass and place anywhere to make your own glide routes. Side goals: defeat a Thornling, take the Sky Shard, glide far, build a vent.
 
-**Wren and the bridge.** Wren, a tinkerer, is stuck with a cart by the river north-east of camp. Build a dry bridge between the two red flag posts (any blocks, no step taller than one block) and Wren crosses it, moves to camp and sets up a workbench. The reward is the recipes for ladders and spring pads.
+**Wren and the bridge.** Wren, a tinkerer, is stuck with a cart by the river north-east of camp. Build a dry bridge across the river near the two red flag posts (any blocks and any height, as long as each step is at most one block) and Wren crosses it, moves to camp and sets up a workbench. The reward is the recipes for ladders and spring pads.
 
 **Workbench and new blocks.** Craft a workbench from 4 planks. Standing near one unlocks Stone Bricks, Thatch and Lanterns, and after Wren's quest, Ladders (climb without using stamina, and they stick to anything, even Loomstone) and Spring Pads (step on one to be flung about six blocks up; open your glider at the top).
 

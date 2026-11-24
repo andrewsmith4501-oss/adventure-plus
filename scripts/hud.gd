@@ -4,6 +4,8 @@ extends CanvasLayer
 
 signal play_pressed
 signal craft_closed
+signal inv_closed
+signal inv_clicked(index: int, button: int, shift: bool)
 signal respawn_pressed
 signal craft_requested(index: int)
 signal music_volume_changed(value: float)
@@ -57,6 +59,10 @@ var toasts: VBoxContainer
 var goals_box: VBoxContainer
 var hurt_rect: ColorRect
 var recipes_box: VBoxContainer
+var pack_grid: GridContainer
+var inv_hotbar: HBoxContainer
+var bin_slot: Panel
+var cursor_icon: Control
 var start_title: Label
 var play_button: Button
 var screens := {}
@@ -178,6 +184,7 @@ func _ready() -> void:
 
 	_build_start_screen()
 	_build_craft_screen()
+	_build_inventory_screen()
 	_build_dead_screen()
 
 
@@ -282,6 +289,7 @@ func _build_start_screen() -> void:
 		["F", "Talk, read, use, open, push a crate"],
 		["Q", "Switch the quest shown on screen"],
 		["C", "Open crafting"],
+		["E or I", "Open your inventory"],
 		["V", "Switch between third and first person"],
 		["Esc", "Pause"],
 	]
@@ -320,7 +328,7 @@ func _slider(value: float) -> HSlider:
 
 
 func _build_craft_screen() -> void:
-	var box := _make_screen("craft", "Crafting", "Recipes use what is in your hotbar. Some need a workbench nearby.")
+	var box := _make_screen("craft", "Crafting", "Recipes use what is in your inventory. Some need a workbench nearby.")
 	var scroll := ScrollContainer.new()
 	scroll.custom_minimum_size = Vector2(500, 430)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -332,6 +340,105 @@ func _build_craft_screen() -> void:
 	var close := _button("Back to the world")
 	close.pressed.connect(func() -> void: craft_closed.emit())
 	box.add_child(close)
+
+
+func _build_inventory_screen() -> void:
+	var box := _make_screen("inv", "Inventory", "Click to pick up a stack and click again to put it down. Right-click takes half, or puts down one. Shift-click moves a stack between your pack and the hotbar. Drop a stack on the bin to throw it away.")
+	box.add_child(_label("PACK", 12, ACCENT))
+	pack_grid = GridContainer.new()
+	pack_grid.columns = 9
+	pack_grid.add_theme_constant_override("h_separation", 6)
+	pack_grid.add_theme_constant_override("v_separation", 6)
+	box.add_child(pack_grid)
+	box.add_child(_label("HOTBAR", 12, ACCENT))
+	inv_hotbar = HBoxContainer.new()
+	inv_hotbar.add_theme_constant_override("separation", 6)
+	box.add_child(inv_hotbar)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	bin_slot = Panel.new()
+	bin_slot.custom_minimum_size = Vector2(52, 52)
+	bin_slot.add_theme_stylebox_override("panel", _style(Color(0.35, 0.12, 0.1, 0.85), 8, 0, 0, DANGER, 2))
+	bin_slot.tooltip_text = "Bin: drop a stack here to throw it away"
+	var bl := _label("BIN", 12, INK)
+	bl.position = Vector2(13, 17)
+	bin_slot.add_child(bl)
+	bin_slot.gui_input.connect(func(ev: InputEvent) -> void: _slot_input(ev, -1))
+	row.add_child(bin_slot)
+	var close := _button("Back to the world")
+	close.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	close.pressed.connect(func() -> void: inv_closed.emit())
+	row.add_child(close)
+	box.add_child(row)
+	cursor_icon = Control.new()
+	cursor_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cursor_icon.visible = false
+	cursor_icon.z_index = 10
+	root.add_child(cursor_icon)
+
+
+func _slot_input(ev: InputEvent, index: int) -> void:
+	if ev is InputEventMouseButton and ev.pressed:
+		var mb := ev as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_LEFT or mb.button_index == MOUSE_BUTTON_RIGHT:
+			inv_clicked.emit(index, mb.button_index, mb.shift_pressed)
+			get_viewport().set_input_as_handled()
+
+
+## One inventory square: a coloured swatch for the item and its count.
+func _slot_panel(s, items: Dictionary, border: Color, number := "") -> Panel:
+	var p := Panel.new()
+	p.custom_minimum_size = Vector2(52, 52)
+	p.add_theme_stylebox_override("panel", _style(PANEL, 8, 0, 0, border, 2))
+	if number != "":
+		var key := _label(number, 10, INK_DIM)
+		key.position = Vector2(5, 1)
+		key.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		p.add_child(key)
+	if s != null:
+		_add_stack(p, s, items)
+		p.tooltip_text = items[s["id"]]["name"]
+	return p
+
+
+func _add_stack(p: Control, s, items: Dictionary) -> void:
+	var icon := ColorRect.new()
+	icon.color = items[s["id"]]["color"]
+	icon.position = Vector2(12, 12)
+	icon.size = Vector2(28, 28)
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.add_child(icon)
+	var n: int = s["n"]
+	if n > 1:
+		var cl := _label(str(n), 13)
+		cl.position = Vector2(22, 30)
+		cl.size = Vector2(26, 18)
+		cl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		cl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
+		cl.add_theme_constant_override("outline_size", 4)
+		cl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		p.add_child(cl)
+
+
+## slots: all 36 (hotbar first), cursor: the stack held by the mouse or null.
+func render_inventory(slots: Array, cursor, items: Dictionary) -> void:
+	for c in pack_grid.get_children():
+		c.queue_free()
+	for c in inv_hotbar.get_children():
+		c.queue_free()
+	for i in slots.size():
+		var p := _slot_panel(slots[i], items, EDGE, str(i + 1) if i < 9 else "")
+		var idx := i
+		p.gui_input.connect(func(ev: InputEvent) -> void: _slot_input(ev, idx))
+		if i < 9:
+			inv_hotbar.add_child(p)
+		else:
+			pack_grid.add_child(p)
+	for c in cursor_icon.get_children():
+		c.queue_free()
+	cursor_icon.visible = cursor != null
+	if cursor != null:
+		_add_stack(cursor_icon, cursor, items)
 
 
 func _build_dead_screen() -> void:
@@ -458,29 +565,8 @@ func render_hotbar(slots: Array, sel: int, items: Dictionary) -> void:
 	for c in hotbar.get_children():
 		c.queue_free()
 	for i in slots.size():
-		var p := Panel.new()
-		p.custom_minimum_size = Vector2(52, 52)
+		var p := _slot_panel(slots[i], items, ACCENT if i == sel else EDGE, str(i + 1))
 		p.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var border := ACCENT if i == sel else EDGE
-		p.add_theme_stylebox_override("panel", _style(PANEL, 8, 0, 0, border, 2))
-		var key := _label(str(i + 1), 10, INK_DIM)
-		key.position = Vector2(5, 1)
-		p.add_child(key)
-		var s = slots[i]
-		if s != null:
-			var icon := ColorRect.new()
-			icon.color = items[s["id"]]["color"]
-			icon.position = Vector2(12, 12)
-			icon.size = Vector2(28, 28)
-			icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			p.add_child(icon)
-			var n: int = s["n"]
-			if n > 1:
-				var cl := _label(str(n), 13)
-				cl.position = Vector2(30, 30)
-				cl.size = Vector2(18, 18)
-				cl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-				p.add_child(cl)
 		hotbar.add_child(p)
 
 
@@ -520,6 +606,8 @@ func render_recipes(rows: Array) -> void:
 
 
 func _process(delta: float) -> void:
+	if cursor_icon.visible:
+		cursor_icon.position = get_viewport().get_mouse_position() - Vector2(26, 26)
 	if _name_timer > 0.0:
 		_name_timer -= delta
 		if _name_timer <= 0.0:

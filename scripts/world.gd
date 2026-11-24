@@ -780,34 +780,60 @@ func _place_caches() -> void:
 	chests[Vector3i(best.x, best_h + 1, best.y)] = "beach"
 
 
-## A dry walking route across the river from one flag post to the other:
-## blocks to stand on above the water with two blocks of headroom, stepping
-## at most one block up or down. Returns the blocks walked on, or [].
+## A dry walkway across the river near Wren's flag posts: blocks to stand on
+## above the water with two blocks of headroom, each step at most one block
+## up or down, from a block on (or right next to) the west bank to one on (or
+## right next to) the east bank. Where it meets the banks doesn't matter, so a
+## bridge built off the flag posts or off a cliff counts too. Returns the
+## blocks walked on from west to east, or [].
 func ford_route() -> Array:
-	var a: Vector2i = ford["a"]
-	var b: Vector2i = ford["b"]
-	var bx0 := a.x - 2
-	var bx1 := b.x + 2
 	var bz0 := FORD_Z - 8
 	var bz1 := FORD_Z + 8
+	# The banks for each row: the last dry column west of the river and the
+	# first dry column east of it.
+	var west := {}
+	var east := {}
+	for z in range(bz0, bz1 + 1):
+		var rx := floori(river_x(z))
+		var wx := rx
+		while wx > rx - 14 and heights[wx + z * W] <= WATER:
+			wx -= 1
+		var ex := rx
+		while ex < rx + 14 and heights[ex + z * W] <= WATER:
+			ex += 1
+		west[z] = wx
+		east[z] = ex
+	var a: Vector2i = ford["a"]
+	var b: Vector2i = ford["b"]
+	var bx0 := a.x - 4
+	var bx1 := b.x + 4
 	var prev := {}
 	var queue: Array = []
-	for y in range(WATER, H - 3):
-		if _standable(a.x, y, a.y):
-			var s := Vector3i(a.x, y, a.y)
-			queue.append(s)
-			prev[s] = s
+	for z in range(bz0, bz1 + 1):
+		var wx: int = west[z]
+		for x in range(maxi(bx0, wx - 1), wx + 2):
+			for y in range(WATER, H - 3):
+				if _standable(x, y, z):
+					var s := Vector3i(x, y, z)
+					queue.append(s)
+					prev[s] = s
 	var head := 0
 	var dirs := [Vector2i(1, 0), Vector2i(0, 1), Vector2i(0, -1), Vector2i(-1, 0)]
 	while head < queue.size():
 		var cur: Vector3i = queue[head]
 		head += 1
-		if cur.x == b.x and cur.z == b.y:
+		var ex: int = east[cur.z]
+		if cur.x >= ex - 1 and cur.x > west[cur.z] + 1:
 			var route := [cur]
 			while prev[cur] != cur:
 				cur = prev[cur]
 				route.push_front(cur)
-			return route
+			# It has to actually cross water, not just walk along one bank.
+			for c in route:
+				var cc: Vector3i = c
+				if heights[cc.x + cc.z * W] <= WATER:
+					return route
+			continue
 		for d in dirs:
 			var nx: int = cur.x + d.x
 			var nz: int = cur.z + d.y
