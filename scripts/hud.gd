@@ -6,6 +6,8 @@ signal play_pressed
 signal craft_closed
 signal respawn_pressed
 signal craft_requested(index: int)
+signal music_volume_changed(value: float)
+signal sound_volume_changed(value: float)
 
 const ACCENT := Color("f2b84b")
 const INK := Color("f4efe3")
@@ -57,7 +59,18 @@ var recipes_box: VBoxContainer
 var start_title: Label
 var play_button: Button
 var screens := {}
+var audio  # audio.gd, for button clicks
+var prompt_label: Label
+var dialog_panel: PanelContainer
+var dialog_name: Label
+var dialog_text: Label
+var banner: VBoxContainer
+var banner_title: Label
+var banner_sub: Label
+var music_slider: HSlider
+var sound_slider: HSlider
 var _name_timer := 0.0
+var _banner_tween: Tween
 
 
 func _ready() -> void:
@@ -117,11 +130,49 @@ func _ready() -> void:
 	_place(item_label, 0.5, 1, 0.5, 1, -200, -104, 200, -78)
 	root.add_child(item_label)
 
+	prompt_label = _label("", 16, INK)
+	prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	prompt_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
+	prompt_label.add_theme_constant_override("outline_size", 6)
+	_place(prompt_label, 0.5, 0.5, 0.5, 0.5, -260, 40, 260, 70)
+	root.add_child(prompt_label)
+
+	banner = VBoxContainer.new()
+	banner.alignment = BoxContainer.ALIGNMENT_CENTER
+	banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_place(banner, 0.5, 0.06, 0.5, 0.06, -400, 0, 400, 90)
+	banner_title = _label("", 40, INK)
+	banner_sub = _label("", 16, ACCENT)
+	for l in [banner_title, banner_sub]:
+		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
+		l.add_theme_constant_override("outline_size", 8)
+		banner.add_child(l)
+	banner.modulate.a = 0.0
+	root.add_child(banner)
+
+	dialog_panel = PanelContainer.new()
+	dialog_panel.add_theme_stylebox_override("panel", _style(Color(0.09, 0.12, 0.1, 0.94), 12, 16, 20, ACCENT.darkened(0.3), 2))
+	dialog_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_place(dialog_panel, 0.5, 1, 0.5, 1, -360, -250, 360, -118)
+	var dbox := VBoxContainer.new()
+	dbox.add_theme_constant_override("separation", 6)
+	dialog_panel.add_child(dbox)
+	dialog_name = _label("", 15, ACCENT)
+	dbox.add_child(dialog_name)
+	dialog_text = _label("", 17, INK, true)
+	dbox.add_child(dialog_text)
+	var cont := _label("F or click to continue", 12, INK_DIM)
+	cont.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	dbox.add_child(cont)
+	dialog_panel.visible = false
+	root.add_child(dialog_panel)
+
 	toasts = VBoxContainer.new()
 	toasts.alignment = BoxContainer.ALIGNMENT_BEGIN
 	toasts.add_theme_constant_override("separation", 6)
 	toasts.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_place(toasts, 0.5, 0.22, 0.5, 0.22, -320, 0, 320, 200)
+	_place(toasts, 0.5, 0.24, 0.5, 0.24, -320, 0, 320, 200)
 	root.add_child(toasts)
 
 	_build_start_screen()
@@ -178,7 +229,13 @@ func _button(text: String) -> Button:
 		b.add_theme_color_override(state, Color("1d1608"))
 	b.add_theme_color_override("font_disabled_color", Color("8b9289"))
 	b.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	b.pressed.connect(_click)
 	return b
+
+
+func _click() -> void:
+	if audio != null:
+		audio.play("ui_click", -4.0, 0.0)
 
 
 func _make_screen(key: String, title: String, body: String) -> VBoxContainer:
@@ -209,7 +266,7 @@ func _make_screen(key: String, title: String, body: String) -> VBoxContainer:
 
 
 func _build_start_screen() -> void:
-	var box := _make_screen("start", "Adventure Plus", "Prototype island. Gather blocks, craft a glider, climb the cliff to the glowing Sky Shard, and watch out for Thornlings.")
+	var box := _make_screen("start", "Adventure Plus", "Gather and build in the meadows of Hearthvale, then climb into the windswept Gale Steppes, where something stirs inside the great mesa. Talk to Bryn at the camp to begin.")
 	var grid := GridContainer.new()
 	grid.columns = 2
 	grid.add_theme_constant_override("h_separation", 14)
@@ -221,6 +278,7 @@ func _build_start_screen() -> void:
 		["Left click", "Hold to break a block, click to attack"],
 		["Right click", "Place the selected block"],
 		["1 to 9, wheel", "Choose a hotbar slot"],
+		["F", "Talk, read, use"],
 		["C", "Open crafting"],
 		["V", "Switch between third and first person"],
 		["Esc", "Pause"],
@@ -231,9 +289,32 @@ func _build_start_screen() -> void:
 		desc.custom_minimum_size = Vector2(360, 0)
 		grid.add_child(desc)
 	box.add_child(grid)
+	var vol := GridContainer.new()
+	vol.columns = 2
+	vol.add_theme_constant_override("h_separation", 14)
+	music_slider = _slider(0.7)
+	music_slider.value_changed.connect(func(v: float) -> void: music_volume_changed.emit(v))
+	sound_slider = _slider(1.0)
+	sound_slider.value_changed.connect(func(v: float) -> void: sound_volume_changed.emit(v))
+	vol.add_child(_label("Music", 15, ACCENT))
+	vol.add_child(music_slider)
+	vol.add_child(_label("Sound", 15, ACCENT))
+	vol.add_child(sound_slider)
+	box.add_child(vol)
 	play_button = _button("Play")
 	play_button.pressed.connect(func() -> void: play_pressed.emit())
 	box.add_child(play_button)
+
+
+func _slider(value: float) -> HSlider:
+	var s := HSlider.new()
+	s.min_value = 0.0
+	s.max_value = 1.0
+	s.step = 0.05
+	s.value = value
+	s.custom_minimum_size = Vector2(240, 24)
+	s.focus_mode = Control.FOCUS_NONE
+	return s
 
 
 func _build_craft_screen() -> void:
@@ -241,13 +322,13 @@ func _build_craft_screen() -> void:
 	recipes_box = VBoxContainer.new()
 	recipes_box.add_theme_constant_override("separation", 8)
 	box.add_child(recipes_box)
-	var close := _button("Back to the island")
+	var close := _button("Back to the world")
 	close.pressed.connect(func() -> void: craft_closed.emit())
 	box.add_child(close)
 
 
 func _build_dead_screen() -> void:
-	var box := _make_screen("dead", "Knocked out", "You wake up back at the beach. Your items are safe.")
+	var box := _make_screen("dead", "Knocked out", "You wake up back at camp. Your items are safe.")
 	var b := _button("Get up")
 	b.pressed.connect(func() -> void: respawn_pressed.emit())
 	box.add_child(b)
@@ -312,14 +393,54 @@ func show_item_name(text: String) -> void:
 	_name_timer = 1.6
 
 
-func set_goals(goals: Array, done: Dictionary) -> void:
+## steps: [{"text", "done"}] for the main quest, side: the same for side goals.
+func set_quest(title: String, steps: Array, side: Array) -> void:
 	for c in goals_box.get_children():
 		c.queue_free()
-	goals_box.add_child(_label("ISLAND GOALS", 12, ACCENT))
-	for g in goals:
-		var is_done: bool = done.has(g["id"])
-		var l := _label(("✓ " if is_done else "○ ") + str(g["text"]), 14, INK_DIM if is_done else INK, true)
+	goals_box.add_child(_label(title.to_upper(), 12, ACCENT))
+	var shown_next := false
+	for g in steps:
+		var is_done: bool = g["done"]
+		if not is_done and shown_next:
+			continue  # Later steps stay hidden until you get there.
+		if not is_done:
+			shown_next = true
+		var l := _label(("✓ " if is_done else "➜ ") + str(g["text"]), 14, INK_DIM if is_done else INK, true)
 		goals_box.add_child(l)
+	if not side.is_empty():
+		var gap := Control.new()
+		gap.custom_minimum_size = Vector2(0, 4)
+		goals_box.add_child(gap)
+		goals_box.add_child(_label("ON THE SIDE", 12, ACCENT))
+		for g in side:
+			var d: bool = g["done"]
+			goals_box.add_child(_label(("✓ " if d else "○ ") + str(g["text"]), 13, INK_DIM if d else INK, true))
+
+
+func set_prompt(text: String) -> void:
+	prompt_label.text = text
+
+
+func show_dialog(speaker: String, text: String) -> void:
+	dialog_name.text = speaker.to_upper()
+	dialog_text.text = text
+	dialog_panel.visible = true
+
+
+func hide_dialog() -> void:
+	dialog_panel.visible = false
+
+
+func show_banner(title: String, sub: String) -> void:
+	banner_title.text = title
+	banner_sub.text = sub
+	if _banner_tween != null:
+		_banner_tween.kill()
+	banner.modulate.a = 0.0
+	_banner_tween = banner.create_tween()
+	_banner_tween.tween_property(banner, "modulate:a", 1.0, 0.6)
+	_banner_tween.tween_interval(2.6)
+	_banner_tween.tween_property(banner, "modulate:a", 0.0, 1.0)
 
 
 func render_hotbar(slots: Array, sel: int, items: Dictionary) -> void:

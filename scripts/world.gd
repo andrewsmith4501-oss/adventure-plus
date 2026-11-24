@@ -1,9 +1,10 @@
 extends Node3D
-## The voxel island: block data, terrain generation, chunk meshes and
-## the small physics helpers (collision, raycast) everything else uses.
+## The voxel world: block data, terrain generation for Hearthvale and the
+## Gale Steppes, the Windworn Hollow dungeon, chunk meshes and the small
+## physics helpers (collision, raycast) everything else uses.
 
-const W := 96
-const D := 96
+const W := 160
+const D := 112
 const H := 48
 const CH := 16
 const WATER := 7
@@ -18,15 +19,53 @@ const LOG := 5
 const LEAVES := 6
 const PLANKS := 7
 const CRYSTAL := 9
+const DRYGRASS := 10
+const SKYGLASS := 11
+const LOOMSTONE := 12
+const LOOMDOOR := 13
+const PLATE := 14
+const PLATE_ON := 15
+const NODE := 16
+const NODE_ON := 17
+const TABLET := 18
+const VENT := 19
+const LOOMVEIN := 20
 
-const MESA_X := 64
-const MESA_Z := 34
+## Blocks the player can't mine (dungeon structure and puzzle pieces).
+const UNBREAKABLE := [LOOMSTONE, LOOMVEIN, LOOMDOOR, PLATE, PLATE_ON, NODE, NODE_ON, TABLET]
+## Blocks too smooth to climb.
+const UNCLIMBABLE := [LOOMSTONE, LOOMVEIN, LOOMDOOR]
+## Blocks drawn at full brightness.
+const GLOWING := [CRYSTAL, LOOMVEIN, SKYGLASS, LOOMDOOR, NODE_ON, PLATE_ON, VENT]
+
+# Where the Gale Steppes start (the cliff line wobbles around this x).
+const STEPPE_X := 94
+# The Sky Shard sits on top of Needle Rock.
+const NEEDLE_X := 143
+const NEEDLE_Z := 26
+# The Windworn Hollow is built into the great mesa.
+const HOLLOW_X0 := 120
+const HOLLOW_X1 := 140
+const HOLLOW_Z0 := 53
+const HOLLOW_Z1 := 67
+const HOLLOW_FY := 25  # floor level you stand on inside
+const MESA_CX := 130
+const MESA_CZ := 60
+const MESA_R := 12.5
+const MESA_TOP := 41
+# The Hearthvale camp, where the game starts.
+const CAMP_X := 24
+const CAMP_Z := 58
 
 var data := PackedByteArray()
 var heights := PackedInt32Array()
 var col_top := PackedInt32Array()
-var mesa_top := 0
-var spawn := Vector3(34.5, 0.0, 58.5)
+var needle_top := 0
+var spawn := Vector3(28.5, 0.0, 60.5)
+## Puzzle positions inside the Hollow, filled in by generate().
+var hollow := {}
+## Updraft vents: Vector3i -> max column height in blocks.
+var vents := {}
 
 var _chunks := {}
 var _dirty := {}
@@ -34,8 +73,14 @@ var _noise := FastNoiseLite.new()
 var _rng := RandomNumberGenerator.new()
 var _material := StandardMaterial3D.new()
 
+# Other mesas on the Steppes: [x, z, radius, top].
+var _mesas := [
+	[108, 30, 5.5, 33], [148, 86, 6.5, 35], [113, 92, 4.5, 31], [152, 52, 4.0, 32],
+]
+
 var colors := {
 	GRASS: {"top": Color(0.40, 0.72, 0.30), "side": Color(0.45, 0.52, 0.27), "bottom": Color(0.50, 0.36, 0.22)},
+	DRYGRASS: {"top": Color(0.74, 0.69, 0.38), "side": Color(0.60, 0.50, 0.31), "bottom": Color(0.50, 0.36, 0.22)},
 	DIRT: {"all": Color(0.52, 0.37, 0.23)},
 	STONE: {"all": Color(0.52, 0.53, 0.56)},
 	SAND: {"all": Color(0.87, 0.80, 0.56)},
@@ -43,6 +88,16 @@ var colors := {
 	LEAVES: {"all": Color(0.24, 0.52, 0.22)},
 	PLANKS: {"all": Color(0.78, 0.62, 0.38)},
 	CRYSTAL: {"all": Color(0.45, 0.95, 1.0)},
+	SKYGLASS: {"all": Color(0.62, 0.80, 0.98)},
+	LOOMSTONE: {"top": Color(0.36, 0.38, 0.46), "side": Color(0.30, 0.32, 0.40), "bottom": Color(0.26, 0.27, 0.33)},
+	LOOMDOOR: {"all": Color(0.24, 0.62, 0.66)},
+	LOOMVEIN: {"all": Color(0.80, 0.62, 0.30)},
+	PLATE: {"all": Color(0.62, 0.45, 0.22)},
+	PLATE_ON: {"all": Color(0.98, 0.80, 0.36)},
+	NODE: {"all": Color(0.40, 0.33, 0.55)},
+	NODE_ON: {"all": Color(1.0, 0.82, 0.42)},
+	TABLET: {"top": Color(0.72, 0.66, 0.52), "side": Color(0.80, 0.73, 0.56), "bottom": Color(0.6, 0.55, 0.45)},
+	VENT: {"top": Color(0.86, 0.96, 1.0), "side": Color(0.46, 0.52, 0.60), "bottom": Color(0.4, 0.44, 0.5)},
 }
 
 # Each face: outward normal, its four corners, a baked light level and which
@@ -75,10 +130,19 @@ func solid_at(p: Vector3) -> bool:
 	return get_b(floori(p.x), floori(p.y), floori(p.z)) != AIR
 
 
+func block_at(p: Vector3) -> int:
+	return get_b(floori(p.x), floori(p.y), floori(p.z))
+
+
 func set_block(x: int, y: int, z: int, b: int) -> void:
 	if x < 0 or z < 0 or x >= W or z >= D or y < 0 or y >= H:
 		return
+	var old := data[idx(x, y, z)]
 	data[idx(x, y, z)] = b
+	if old == VENT:
+		vents.erase(Vector3i(x, y, z))
+	if b == VENT:
+		vents[Vector3i(x, y, z)] = 14
 	if b != AIR and y > col_top[x + z * W]:
 		col_top[x + z * W] = y
 	for dx in range(-1, 2):
@@ -105,27 +169,103 @@ func surface_y(x: float, z: float) -> float:
 	return y + 0.01
 
 
+## "hearthvale", "steppes" or "hollow" for a world position.
+func region_at(p: Vector3) -> String:
+	if in_hollow(p):
+		return "hollow"
+	var edge := STEPPE_X + (fbm(p.z * 0.06, 3.0) - 0.5) * 10.0
+	return "steppes" if p.x > edge - 1.0 else "hearthvale"
+
+
+func in_hollow(p: Vector3) -> bool:
+	return p.x >= HOLLOW_X0 and p.x < HOLLOW_X1 + 1 and p.z >= HOLLOW_Z0 and p.z < HOLLOW_Z1 + 1 and p.y >= HOLLOW_FY - 1 and p.y < MESA_TOP
+
+
+## True when nothing is overhead (gusts only reach you outdoors).
+func open_sky(p: Vector3) -> bool:
+	var ix := floori(p.x)
+	var iz := floori(p.z)
+	if ix < 0 or iz < 0 or ix >= W or iz >= D:
+		return true
+	return col_top[ix + iz * W] < floori(p.y + 1.0)
+
+
+## The updraft lifting a point, as an upward speed (0 when none).
+func updraft_at(p: Vector3) -> float:
+	for k in vents:
+		var v: Vector3i = k
+		var dx := p.x - (v.x + 0.5)
+		var dz := p.z - (v.z + 0.5)
+		if dx * dx + dz * dz > 2.0 * 2.0:
+			continue
+		var top := vent_top(v)
+		if p.y > v.y + 0.5 and p.y < top:
+			# Strong near the vent, fading over the last few blocks.
+			return 9.0 * clampf((top - p.y) / 4.0, 0.25, 1.0)
+	return 0.0
+
+
+## The height an updraft column reaches: until it hits a block or its limit.
+func vent_top(v: Vector3i) -> float:
+	var limit: int = vents.get(v, 14)
+	for dy in range(1, limit + 1):
+		if get_b(v.x, v.y + dy, v.z) != AIR:
+			return float(v.y + dy)
+	return float(v.y + limit + 1)
+
+
 # ---------------------------------------------------------------- terrain
 
 func fbm(x: float, z: float) -> float:
 	return clampf(_noise.get_noise_2d(x, z) * 0.9 + 0.5, 0.0, 1.0)
 
 
-func height_at(x: int, z: int) -> int:
-	var cx := x - W / 2.0
-	var cz := z - D / 2.0
-	var d := sqrt(cx * cx + cz * cz) / (W * 0.47) + (fbm(x * 0.05 + 9.0, z * 0.05) - 0.5) * 0.25
-	var mask := 1.0 - smoothstep(0.55, 1.0, d)
-	var h := 3.0 + mask * (5.0 + fbm(x * 0.055, z * 0.055) * 10.0)
-	# The tall cliff (mesa) with the Sky Shard on top.
-	var mx := float(x - MESA_X)
-	var mz := float(z - MESA_Z)
-	var md := sqrt(mx * mx + mz * mz) + (fbm(x * 0.25, z * 0.25) - 0.5) * 3.5
-	if md < 8.0:
-		h = maxf(h, 31.0 + fbm(x * 0.15, z * 0.15) * 2.5)
-	elif md < 12.0:
-		h = maxf(h, h + (12.0 - md) * 1.2)
-	return mini(H - 8, floori(h))
+func river_x(z: float) -> float:
+	return 52.0 + sin(z * 0.07) * 7.0 + sin(z * 0.17 + 1.0) * 2.0
+
+
+func height_at(x: int, z: int) -> float:
+	# Island outline: an oval with a noisy coast.
+	var ex := (x - W / 2.0) / (W * 0.48)
+	var ez := (z - D / 2.0) / (D * 0.47)
+	var d := sqrt(ex * ex + ez * ez) + (fbm(x * 0.05 + 9.0, z * 0.05) - 0.5) * 0.22
+	var mask := 1.0 - smoothstep(0.66, 1.0, d)
+
+	# Hearthvale: rolling meadows with low terraced cliffs.
+	var hv := 9.5 + fbm(x * 0.045, z * 0.045) * 6.0
+	hv += floorf(fbm(x * 0.022 + 30.0, z * 0.022) * 3.2) * 2.0
+
+	# Gale Steppes: a high, windswept plateau behind a cliff wall.
+	var cliff := STEPPE_X + (fbm(z * 0.06, 3.0) - 0.5) * 10.0
+	var t := clampf((x - cliff) / 2.0, 0.0, 1.0)
+	var st := 22.5 + fbm(x * 0.03 + 70.0, z * 0.03) * 4.0
+	var h := lerpf(hv, st, t)
+	h = 3.0 + (h - 3.0) * mask
+
+	# A river winds through Hearthvale from coast to coast.
+	if x < cliff - 4.0:
+		var rd := absf(x - river_x(z))
+		if rd < 5.0:
+			h = minf(h, lerpf(4.5, h, smoothstep(1.8, 5.0, rd)))
+
+	# Mesas, Needle Rock and the great mesa that holds the Hollow.
+	for m in _mesas + [[MESA_CX, MESA_CZ, MESA_R, MESA_TOP]]:
+		var mx: float = x - float(m[0])
+		var mz: float = z - float(m[1])
+		var r: float = m[2]
+		var md := sqrt(mx * mx + mz * mz) + (fbm(x * 0.25, z * 0.25) - 0.5) * 3.0
+		if md < r:
+			h = maxf(h, float(m[3]) + fbm(x * 0.15, z * 0.15) * 1.5)
+		elif md < r + 3.0:
+			h = maxf(h, h + (r + 3.0 - md) * 1.2)
+	var nx := float(x - NEEDLE_X)
+	var nz := float(z - NEEDLE_Z)
+	var nd := sqrt(nx * nx + nz * nz)
+	if nd < 2.3:
+		h = maxf(h, 42.0)
+	elif nd < 4.0:
+		h = maxf(h, h + (4.0 - nd) * 2.0)
+	return h
 
 
 func generate() -> void:
@@ -142,9 +282,21 @@ func generate() -> void:
 	col_top.resize(W * D)
 	for z in D:
 		for x in W:
-			var h := height_at(x, z)
-			heights[x + z * W] = h
-			var rocky := fbm(x * 0.12 + 50.0, z * 0.12) > 0.68 and h > WATER + 2
+			heights[x + z * W] = mini(H - 6, floori(height_at(x, z)))
+
+	# Level the camp and the apron in front of the Hollow.
+	var camp_h := heights[CAMP_X + CAMP_Z * W]
+	_flatten(CAMP_X - 8, CAMP_Z - 7, CAMP_X + 7, CAMP_Z + 7, camp_h, 3)
+	_flatten(HOLLOW_X0 - 9, HOLLOW_Z0 + 2, HOLLOW_X0 - 1, HOLLOW_Z1 - 2, HOLLOW_FY - 1, 3)
+
+	for z in D:
+		for x in W:
+			var h := heights[x + z * W]
+			var steppe := region_at(Vector3(x, h, z)) != "hearthvale"
+			var rocky := fbm(x * 0.12 + 50.0, z * 0.12) > (0.6 if steppe else 0.68) and h > WATER + 2
+			var top_block := DRYGRASS if steppe else GRASS
+			if h > 30:
+				top_block = STONE
 			for y in range(h + 1):
 				var b := STONE
 				if y == h:
@@ -153,15 +305,18 @@ func generate() -> void:
 					elif rocky:
 						b = STONE
 					else:
-						b = GRASS
+						b = top_block
 				elif y > h - 3:
-					b = SAND if h <= WATER + 1 else DIRT
+					b = SAND if h <= WATER + 1 else (STONE if h > 30 else DIRT)
 				data[idx(x, y, z)] = b
 
 	_plant_trees()
-	mesa_top = heights[MESA_X + MESA_Z * W]
-	_set_raw(MESA_X, mesa_top + 1, MESA_Z, STONE)
-	_set_raw(MESA_X, mesa_top + 2, MESA_Z, CRYSTAL)
+	_place_skyglass()
+	_build_camp(camp_h)
+	needle_top = heights[NEEDLE_X + NEEDLE_Z * W]
+	_set_raw(NEEDLE_X, needle_top + 1, NEEDLE_Z, STONE)
+	_set_raw(NEEDLE_X, needle_top + 2, NEEDLE_Z, CRYSTAL)
+	_build_hollow()
 
 	for z in D:
 		for x in W:
@@ -180,17 +335,40 @@ func generate() -> void:
 			_build_chunk(cx, cz)
 
 
+## Sets a rectangle of the height map to h, blending over a border.
+func _flatten(x0: int, z0: int, x1: int, z1: int, h: int, border: int) -> void:
+	for z in range(z0 - border, z1 + border + 1):
+		for x in range(x0 - border, x1 + border + 1):
+			if x < 0 or z < 0 or x >= W or z >= D:
+				continue
+			var ox := maxi(maxi(x0 - x, x - x1), 0)
+			var oz := maxi(maxi(z0 - z, z - z1), 0)
+			var o := maxi(ox, oz)
+			var k := 1.0 - float(o) / float(border + 1)
+			var cur := heights[x + z * W]
+			heights[x + z * W] = roundi(lerpf(cur, h, k))
+
+
 func _set_raw(x: int, y: int, z: int, b: int) -> void:
 	if x >= 0 and z >= 0 and x < W and z < D and y >= 0 and y < H:
 		data[idx(x, y, z)] = b
 
 
+func _fill(x0: int, y0: int, z0: int, x1: int, y1: int, z1: int, b: int) -> void:
+	for y in range(y0, y1 + 1):
+		for z in range(z0, z1 + 1):
+			for x in range(x0, x1 + 1):
+				_set_raw(x, y, z, b)
+
+
 func _plant_trees() -> void:
-	for i in 90:
+	for i in 230:
 		var x := 4 + _rng.randi_range(0, W - 9)
 		var z := 4 + _rng.randi_range(0, D - 9)
 		var h := heights[x + z * W]
 		if get_b(x, h, z) != GRASS or h > 22:
+			continue
+		if absi(x - CAMP_X) < 10 and absi(z - CAMP_Z) < 9:
 			continue
 		if Vector2(x - spawn.x, z - spawn.z).length() < 4.0:
 			continue
@@ -207,6 +385,112 @@ func _plant_trees() -> void:
 					if get_b(x + dx, top + dy, z + dz) == AIR:
 						_set_raw(x + dx, top + dy, z + dz, LEAVES)
 		_set_raw(x, top + 1, z, LEAVES)
+
+
+## Small clusters of Skyglass poking out of the Steppes.
+func _place_skyglass() -> void:
+	var placed := 0
+	for i in 400:
+		if placed >= 12:
+			break
+		var x := STEPPE_X + 6 + _rng.randi_range(0, W - STEPPE_X - 14)
+		var z := 8 + _rng.randi_range(0, D - 16)
+		var h := heights[x + z * W]
+		if h < 20 or h > 30 or in_hollow(Vector3(x, HOLLOW_FY, z)):
+			continue
+		if absi(x - HOLLOW_X0) < 12 and absi(z - MESA_CZ) < 10:
+			continue
+		for k in 4:
+			var dx := _rng.randi_range(-1, 1)
+			var dz := _rng.randi_range(-1, 1)
+			var hh := heights[clampi(x + dx, 0, W - 1) + clampi(z + dz, 0, D - 1) * W]
+			for y in range(1, 1 + _rng.randi_range(1, 2)):
+				_set_raw(x + dx, hh + y, z + dz, SKYGLASS)
+		placed += 1
+
+
+## A small plank hut with an open front, east of which Bryn waits.
+func _build_camp(h: int) -> void:
+	var x0 := CAMP_X - 6
+	var z0 := CAMP_Z - 5
+	_fill(x0, h, z0, x0 + 5, h, z0 + 5, PLANKS)
+	for y in range(h + 1, h + 4):
+		for i in 6:
+			_set_raw(x0 + i, y, z0, PLANKS)
+			_set_raw(x0 + i, y, z0 + 5, PLANKS)
+			_set_raw(x0, y, z0 + i, LOG if i == 0 or i == 5 else PLANKS)
+	# East wall with a doorway, logs at the corners.
+	for y in range(h + 1, h + 4):
+		for i in 6:
+			if (i == 2 or i == 3) and y < h + 3:
+				continue
+			_set_raw(x0 + 5, y, z0 + i, LOG if i == 0 or i == 5 else PLANKS)
+	_fill(x0 - 1, h + 4, z0 - 1, x0 + 6, h + 4, z0 + 6, LOG)
+	_fill(x0, h + 5, z0, x0 + 5, h + 5, z0 + 5, PLANKS)
+	# Log seats around a stone fire ring.
+	_set_raw(CAMP_X + 3, h + 1, CAMP_Z + 4, STONE)
+	_set_raw(CAMP_X + 1, h + 1, CAMP_Z + 4, LOG)
+	_set_raw(CAMP_X + 5, h + 1, CAMP_Z + 4, LOG)
+
+
+## The Windworn Hollow: a sealed plate room, then a tall wind shaft with
+## a vent at the bottom and a Thread Node on a high ledge.
+func _build_hollow() -> void:
+	var fy := HOLLOW_FY
+	var x0 := HOLLOW_X0
+	var x1 := HOLLOW_X1
+	var z0 := HOLLOW_Z0
+	var z1 := HOLLOW_Z1
+	var mid := (z0 + z1) / 2  # 60
+	_fill(x0, fy - 1, z0, x1, MESA_TOP, z1, LOOMSTONE)
+	# Room A, the plate room.
+	_fill(x0 + 1, fy, z0 + 1, x0 + 11, fy + 4, z1 - 1, AIR)
+	# Entrance tunnel through the mesa's west side, framed in Loomstone.
+	_fill(x0 - 5, fy - 1, mid - 2, x0, fy + 3, mid + 1, LOOMSTONE)
+	_fill(x0 - 6, fy, mid - 1, x0, fy + 2, mid, AIR)
+	# Room B, the wind shaft.
+	_fill(x0 + 13, fy, z0 + 2, x1 - 1, fy + 15, z1 - 2, AIR)
+	# Sealed door between the rooms.
+	_fill(x0 + 12, fy, mid - 1, x0 + 12, fy + 2, mid, LOOMDOOR)
+	# High ledge along the east wall of the shaft.
+	_fill(x1 - 2, fy, z0 + 2, x1 - 1, fy + 11, z1 - 2, LOOMSTONE)
+	var node := Vector3i(x1 - 1, fy + 12, mid)
+	_set_raw(node.x, node.y, node.z, NODE)
+	var vent := Vector3i(x0 + 15, fy - 1, mid)
+	_set_raw(vent.x, vent.y, vent.z, VENT)
+	# Before the Node is restored the updraft stops short of the ledge
+	# unless you glide; afterwards it carries you out through the roof.
+	vents[vent] = 15
+	var plates := [Vector3i(x0 + 3, fy - 1, z0 + 3), Vector3i(x0 + 9, fy - 1, z1 - 3)]
+	for p in plates:
+		_set_raw(p.x, p.y, p.z, PLATE)
+	var tablets := [Vector3i(x0 + 1, fy + 1, mid + 3), Vector3i(x0 + 14, fy + 1, z0 + 1)]
+	for t in tablets:
+		_set_raw(t.x, t.y, t.z, TABLET)
+	# Glowing threads run around the walls.
+	_vein_band(fy + 3, x0 + 1, z0 + 1, x0 + 11, z1 - 1)
+	for y in [fy + 4, fy + 9, fy + 14]:
+		_vein_band(y, x0 + 13, z0 + 2, x1 - 3, z1 - 2)
+	# Two loose stones in the plate room, in case you came empty-handed.
+	_set_raw(x0 + 6, fy, z0 + 1, STONE)
+	_set_raw(x0 + 7, fy, z0 + 1, STONE)
+	hollow = {
+		"plates": plates,
+		"door": [Vector3i(x0 + 12, fy, mid - 1), Vector3i(x0 + 12, fy + 2, mid)],
+		"node": node,
+		"vent": vent,
+		"tablets": tablets,
+		"skylight": [Vector3i(vent.x - 1, fy + 16, vent.z - 1), Vector3i(vent.x + 1, MESA_TOP + 2, vent.z + 1)],
+	}
+
+
+## Turns the Loomstone around an air box at height y into a dotted band of veins.
+func _vein_band(y: int, ax: int, az: int, bx: int, bz: int) -> void:
+	for x in range(ax - 1, bx + 2):
+		for z in range(az - 1, bz + 2):
+			var edge := x == ax - 1 or x == bx + 1 or z == az - 1 or z == bz + 1
+			if edge and get_b(x, y, z) == LOOMSTONE and (x + z) % 3 != 0:
+				_set_raw(x, y, z, LOOMVEIN)
 
 
 func _hash3(x: int, y: int, z: int) -> float:
@@ -265,7 +549,7 @@ func _build_chunk(cx: int, cz: int) -> void:
 						var s2 := 1 if get_b(nx + o2.x, ny + o2.y, nz + o2.z) != AIR else 0
 						var cc := 1 if get_b(nx + o1.x + o2.x, ny + o1.y + o2.y, nz + o1.z + o2.z) != AIR else 0
 						var ao := 0 if (s1 == 1 and s2 == 1) else 3 - (s1 + s2 + cc)
-						var lit := (1.15 if b == CRYSTAL else shade * jitter) * (0.55 + ao * 0.15)
+						var lit := (1.15 * (0.75 + 0.25 * shade) if b in GLOWING else shade * jitter) * (0.55 + ao * 0.15)
 						cols.append(Color(base.r * lit, base.g * lit, base.b * lit))
 					inds.append_array(PackedInt32Array([start, start + 1, start + 2, start + 2, start + 1, start + 3]))
 

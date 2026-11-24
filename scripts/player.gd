@@ -34,6 +34,11 @@ var swing_t := 0.0
 var in_water := false
 var glide_start_y := 0.0
 var glide_dist := 0.0
+## Push from Gale Steppes gusts, set by the game each frame.
+var wind := Vector3.ZERO
+var _was_in_water := false
+var _step_i := 0
+var _smooth_warned := false
 
 # Camera.
 var cam_yaw := PI * 0.75
@@ -180,6 +185,18 @@ func _snap_wall(f: Vector3) -> Vector3:
 	return Vector3(0, 0, signf(f.z))
 
 
+## True when the wall in direction w is too smooth to climb (Loomstone).
+func _smooth(w: Vector3, y_off: float) -> bool:
+	var b := world.block_at(Vector3(pos.x + w.x * (hw + 0.25), pos.y + y_off, pos.z + w.z * (hw + 0.25)))
+	return b in World.UNCLIMBABLE
+
+
+func _smooth_hint() -> void:
+	if not _smooth_warned:
+		_smooth_warned = true
+		game.toast("Loomstone is too smooth to climb")
+
+
 func use_stamina(amount: float) -> void:
 	stamina = maxf(0.0, stamina - amount)
 	stam_delay = 0.7
@@ -196,12 +213,14 @@ func start_glide() -> void:
 		return
 	mode = "glide"
 	glider.visible = true
+	game.audio.play("glider_open", -3.0)
 
 
 func stop_glide() -> void:
 	if mode == "glide":
 		mode = "walk"
 		glider.visible = false
+		game.audio.play("glider_close", -6.0)
 
 
 # ---------------------------------------------------------------- update
@@ -213,6 +232,9 @@ func update(dt: float, jump: bool) -> void:
 	var in_r := (1 if _key(KEY_D) else 0) - (1 if _key(KEY_A) else 0)
 	var shift := _key(KEY_SHIFT)
 	in_water = pos.y + 0.7 < World.WATER_SURF
+	if in_water and not _was_in_water and vel.y < -2.0:
+		game.audio.play("splash", -4.0)
+	_was_in_water = in_water
 
 	if mode == "climb":
 		_update_climb(dt, r, in_f, in_r, shift, jump)
@@ -259,7 +281,7 @@ func _update_climb(dt: float, r: Vector3, in_f: int, in_r: int, shift: bool, jum
 		vel = Vector3(0, 7, 0)
 	else:
 		vel = Vector3(t.x * in_r * 2.2 + wall.x * 0.6, in_f * 2.6, t.z * in_r * 2.2 + wall.z * 0.6)
-	use_stamina((11.0 if (in_f != 0 or in_r != 0) else 3.5) * dt)
+	use_stamina((11.0 if (in_f != 0 or in_r != 0) else 3.5) * dt + wind.length() * 1.6 * dt)
 	if jump:
 		if stamina >= 12.0:
 			use_stamina(18.0)
@@ -271,6 +293,11 @@ func _update_climb(dt: float, r: Vector3, in_f: int, in_r: int, shift: bool, jum
 	world.move_entity(self, dt)
 	var chest := _wall_probe(wall, 1.2)
 	var feet := _wall_probe(wall, 0.3)
+	if chest and _smooth(wall, 1.2):
+		mode = "walk"
+		vel = Vector3(-wall.x * 1.5, 0, -wall.z * 1.5)
+		_smooth_hint()
+		return
 	if not chest and feet and (in_f > 0 or leap_t > 0.0):
 		mode = "mantle"
 		mantle_t = 0.42
@@ -285,8 +312,14 @@ func _update_climb(dt: float, r: Vector3, in_f: int, in_r: int, shift: bool, jum
 
 
 func _update_glide(dt: float, f: Vector3, r: Vector3, in_f: int, in_r: int, shift: bool, jump: bool) -> void:
-	vel.y += (-2.0 - vel.y) * minf(1.0, 5.0 * dt)
-	var target := f * (9.0 + in_f * 2.0) + r * (in_r * 3.0)
+	var lift := world.updraft_at(pos)
+	if lift > 0.0:
+		vel.y += (lift - vel.y) * minf(1.0, 3.0 * dt)
+	else:
+		vel.y += (-2.0 - vel.y) * minf(1.0, 5.0 * dt)
+	# In an updraft you hang in the air column unless you steer out of it.
+	var cruise := (in_f * 5.0) if lift > 0.0 else (9.0 + in_f * 2.0)
+	var target := f * cruise + r * (in_r * 3.0) + wind * 1.4
 	var k := minf(1.0, 2.2 * dt)
 	vel.x += (target.x - vel.x) * k
 	vel.z += (target.z - vel.z) * k
@@ -302,7 +335,7 @@ func _update_glide(dt: float, f: Vector3, r: Vector3, in_f: int, in_r: int, shif
 	var w := _snap_wall(f)
 	if grounded or in_water or jump or shift or exhausted:
 		stop_glide()
-	elif in_f > 0 and _wall_probe(w, 1.2):
+	elif in_f > 0 and _wall_probe(w, 1.2) and not _smooth(w, 1.2):
 		stop_glide()
 		mode = "climb"
 		wall = w
@@ -321,8 +354,9 @@ func _update_walk(dt: float, f: Vector3, r: Vector3, in_f: int, in_r: int, shift
 	elif wish.length_squared() > 0.01:
 		_turn_toward(_yaw_of(wish), 12.0 * dt)
 	var k := minf(1.0, (14.0 if grounded else (4.0 if in_water else 2.5)) * dt)
-	vel.x += (wish.x * speed - vel.x) * k
-	vel.z += (wish.z * speed - vel.z) * k
+	var push := wind if grounded and not in_water else wind * 0.5
+	vel.x += (wish.x * speed + push.x - vel.x) * k
+	vel.z += (wish.z * speed + push.z - vel.z) * k
 	if in_water:
 		vel.y -= 7.0 * dt
 		vel.y *= pow(0.15, dt)
@@ -332,11 +366,14 @@ func _update_walk(dt: float, f: Vector3, r: Vector3, in_f: int, in_r: int, shift
 		vel.y = maxf(-45.0, vel.y - 26.0 * dt)
 		if jump and grounded:
 			vel.y = 8.2
+			game.audio.play("jump", -8.0)
 		elif jump and not grounded and vel.y < 1.5:
 			glide_start_y = pos.y
 			glide_dist = 0.0
 			start_glide()
 	var landed := world.move_entity(self, dt)
+	if landed < -7.0 and not in_water:
+		game.audio.play("land", -6.0 if landed > -16.0 else 0.0)
 	if landed < -16.0 and not in_water:
 		game.hurt_player(ceili((-landed - 16.0) / 3.5), null)
 		game.toast("Ouch, a hard landing")
@@ -344,7 +381,9 @@ func _update_walk(dt: float, f: Vector3, r: Vector3, in_f: int, in_r: int, shift
 	if wish.length_squared() > 0.01 and not exhausted and not in_water:
 		var wd := wish.normalized()
 		var w := _snap_wall(wd)
-		if _wall_probe(w, 1.2) and _wall_probe(w, 0.4) and wd.dot(w) > 0.6:
+		if _wall_probe(w, 1.2) and _wall_probe(w, 0.4) and wd.dot(w) > 0.6 and _smooth(w, 1.2):
+			_smooth_hint()
+		elif _wall_probe(w, 1.2) and _wall_probe(w, 0.4) and wd.dot(w) > 0.6:
 			mode = "climb"
 			wall = w
 			vel = Vector3.ZERO
@@ -364,6 +403,7 @@ func animate(dt: float) -> void:
 	var a_rz := 0.0
 	if mode == "climb" or mode == "mantle":
 		_walk_phase += (absf(vel.y) + sp) * dt * 3.0
+		_footstep(-14.0)
 		var s := sin(_walk_phase)
 		a_l = -2.7 + s * 0.45
 		a_r = -2.7 - s * 0.45
@@ -392,6 +432,8 @@ func animate(dt: float) -> void:
 		l_r = 0.2
 	else:
 		_walk_phase += sp * dt * 2.2
+		if sp > 1.0:
+			_footstep(-9.0 if sp > 7.0 else -11.0)
 		var amt := minf(1.0, sp / 5.0) * (1.0 if sp > 7.0 else 0.7)
 		var s := sin(_walk_phase)
 		l_l = s * amt
@@ -409,6 +451,29 @@ func animate(dt: float) -> void:
 	if sw > 0.0:
 		_sh_r.rotation.x = -1.4 - sin(sw * PI) * 1.3
 		_sh_r.rotation.z = 0.0
+
+
+## Plays a footstep each time a foot comes down, matching the ground.
+func _footstep(volume_db: float) -> void:
+	var i := floori(_walk_phase / PI)
+	if i == _step_i:
+		return
+	_step_i = i
+	if dt_paused():
+		return
+	var b := world.block_at(pos + Vector3(0, -0.2, 0))
+	if mode == "climb" or mode == "mantle":
+		b = world.block_at(pos + wall * 0.6 + Vector3(0, 1.0, 0))
+	var sound := "step_grass"
+	if b in [World.STONE, World.LOOMSTONE, World.LOOMVEIN, World.SKYGLASS, World.CRYSTAL, World.TABLET, World.VENT, World.PLATE, World.PLATE_ON]:
+		sound = "step_stone"
+	elif b in [World.PLANKS, World.LOG]:
+		sound = "step_wood"
+	game.audio.play(sound, volume_db, 0.12)
+
+
+func dt_paused() -> bool:
+	return game == null or not game.running
 
 
 func update_camera(roll: float) -> void:
