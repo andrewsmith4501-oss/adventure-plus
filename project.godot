@@ -1,0 +1,22 @@
+; Engine configuration file.
+; Godot 4.3 or newer.
+
+config_version=5
+
+[application]
+
+config/name="Adventure Plus"
+config/description="Co-op sandbox adventure: gather, build and craft, then climb, glide and fight across a voxel world."
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.3", "GL Compatibility")
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+anti_aliasing/quality/msaa_3d=2
