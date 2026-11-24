@@ -4,6 +4,8 @@ extends CanvasLayer
 
 signal play_pressed
 signal craft_closed
+signal inv_closed
+signal inv_clicked(index: int, button: int, shift: bool)
 signal respawn_pressed
 signal craft_requested(index: int)
 signal music_volume_changed(value: float)
@@ -19,9 +21,10 @@ const DANGER := Color("e8564a")
 
 class Hearts extends Control:
 	var hp := 10
+	var max_hp := 10
 
 	func _draw() -> void:
-		for i in 5:
+		for i in max_hp / 2:
 			var v := hp - i * 2
 			var col := Color("ff5a5a")
 			if v == 1:
@@ -46,7 +49,194 @@ class Ring extends Control:
 			draw_arc(c, 17.0, -PI / 2.0, -PI / 2.0 + TAU * value, 40, col, 6.0, true)
 
 
+## A small picture of an item: a little cube for blocks, pixel art for tools.
+class ItemIcon extends Control:
+	var id := ""
+	var color := Color.WHITE
+	var is_block := false
+
+	# 12x12 pixel art. b = the item's colour, e = a lighter edge,
+	# g = brass guard, h = wooden handle, d = darker shade.
+	const ART := {
+		"wsword": [
+			"..........ee",
+			".........ebe",
+			"........ebb.",
+			".......ebb..",
+			"......ebb...",
+			".....ebb....",
+			"..g.ebb.....",
+			"...gbb......",
+			"...hgg......",
+			"..hh..g.....",
+			".hh.........",
+			"hh..........",
+		],
+		"spick": [
+			"...eebbbb...",
+			"..eb....bbd.",
+			".eb.....hbbd",
+			".b.....h..bd",
+			"......h....d",
+			".....h......",
+			"....h.......",
+			"...h........",
+			"..h.........",
+			".h..........",
+			"h...........",
+			"............",
+		],
+		"stick": [
+			"..........hh",
+			".........hhd",
+			"........hhd.",
+			".......hhd..",
+			"......hhd...",
+			".....hhd....",
+			"....hhd.....",
+			"...hhd......",
+			"..hhd.......",
+			".hhd........",
+			"hhd.........",
+			"hd..........",
+		],
+		"glider": [
+			"............",
+			"gggggggggggg",
+			"ebbbbbbbbbbe",
+			".ebbbbbbbbe.",
+			"..ebbbbbbe..",
+			"...ebddbe...",
+			"....hddh....",
+			"....h..h....",
+			"....h..h....",
+			"....h..h....",
+			"............",
+			"............",
+		],
+		"shard": [
+			".....ee.....",
+			"....ebbd....",
+			"....ebbd....",
+			"...ebbbbd...",
+			"...ebbbbd...",
+			"..ebbbbbbd..",
+			"..ebbbbbbd..",
+			"...ebbbbd...",
+			"...ebbbbd...",
+			"....ebbd....",
+			"....ebbd....",
+			".....dd.....",
+		],
+	}
+
+	func _init(item_id: String, item: Dictionary) -> void:
+		id = item_id
+		color = item["color"]
+		is_block = item.has("block")
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		size = Vector2(36, 36)
+		custom_minimum_size = size
+
+	func _draw() -> void:
+		var art_id := id
+		if id == "ssword":
+			art_id = "wsword"
+		if ART.has(art_id):
+			_pixels(ART[art_id])
+		else:
+			_cube()
+
+	func _pixels(rows: Array) -> void:
+		var px := size.x / 12.0
+		var pal := {
+			"b": color,
+			"e": color.lightened(0.35),
+			"d": color.darkened(0.35),
+			"g": Color("d9a63a"),
+			"h": Color("7a5432"),
+		}
+		# A soft shadow first, then the pixels.
+		for pass_i in 2:
+			for y in rows.size():
+				var row: String = rows[y]
+				for x in row.length():
+					var ch := row[x]
+					if ch == ".":
+						continue
+					var c: Color = pal[ch]
+					var at := Vector2(x * px, y * px)
+					if pass_i == 0:
+						draw_rect(Rect2(at + Vector2(1.5, 1.5), Vector2(px, px)), Color(0, 0, 0, 0.35))
+					else:
+						draw_rect(Rect2(at, Vector2(px + 0.3, px + 0.3)), c)
+
+	func _cube() -> void:
+		var w := size.x
+		var c := Vector2(w / 2.0, w / 2.0)
+		var r := w * 0.42
+		var top := c + Vector2(0, -r)
+		var left := c + Vector2(-r * 0.87, -r * 0.5)
+		var right := c + Vector2(r * 0.87, -r * 0.5)
+		var mid := c
+		var bl := c + Vector2(-r * 0.87, r * 0.5)
+		var br := c + Vector2(r * 0.87, r * 0.5)
+		var bot := c + Vector2(0, r)
+		draw_colored_polygon(PackedVector2Array([top, right, mid, left]), color.lightened(0.12))
+		draw_colored_polygon(PackedVector2Array([left, mid, bot, bl]), color.darkened(0.12))
+		draw_colored_polygon(PackedVector2Array([mid, right, br, bot]), color.darkened(0.3))
+		var edge := Color(0, 0, 0, 0.35)
+		draw_polyline(PackedVector2Array([top, right, br, bot, bl, left, top]), edge, 1.0, true)
+		draw_line(mid, bot, edge, 1.0, true)
+		draw_line(left, mid, edge, 1.0, true)
+		draw_line(mid, right, edge, 1.0, true)
+
+
+## A compass strip: the way the camera faces is in the middle, with the
+## points of the compass and markers for the camp and the current quest.
+class Compass extends Control:
+	var heading := 0.0  # radians, clockwise from north
+	## [{"bearing": radians, "color": Color, "label": String}]
+	var markers: Array = []
+	const SPAN := PI * 0.75  # visible range across the whole strip
+
+	func _x_for(bearing: float) -> float:
+		var rel := fposmod(bearing - heading + PI, TAU) - PI
+		return size.x / 2.0 + rel / (SPAN / 2.0) * (size.x / 2.0)
+
+	func _draw() -> void:
+		var font := get_theme_default_font()
+		var bg := StyleBoxFlat.new()
+		bg.bg_color = Color(0.086, 0.11, 0.094, 0.7)
+		bg.set_corner_radius_all(8)
+		bg.border_color = Color(0.957, 0.937, 0.89, 0.18)
+		bg.set_border_width_all(1)
+		draw_style_box(bg, Rect2(Vector2.ZERO, size))
+		var names := {0: "N", 45: "NE", 90: "E", 135: "SE", 180: "S", 225: "SW", 270: "W", 315: "NW"}
+		for deg in range(0, 360, 15):
+			var x := _x_for(deg_to_rad(deg))
+			if x < 8.0 or x > size.x - 8.0:
+				continue
+			if names.has(deg):
+				var txt: String = names[deg]
+				var fs := 16 if txt.length() == 1 else 12
+				var col := Color("f2b84b") if deg == 0 else Color("f4efe3")
+				var tw := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+				draw_string(font, Vector2(x - tw / 2.0, size.y - 9.0), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
+			else:
+				draw_line(Vector2(x, size.y - 16.0), Vector2(x, size.y - 9.0), Color(1, 1, 1, 0.35), 1.0)
+		for m in markers:
+			var x := _x_for(m["bearing"])
+			var col: Color = m["color"]
+			var clamped := clampf(x, 10.0, size.x - 10.0)
+			var y := 4.0
+			draw_colored_polygon(PackedVector2Array([Vector2(clamped - 5, y), Vector2(clamped + 5, y), Vector2(clamped, y + 7)]), col)
+		# The middle line: where you're facing.
+		draw_line(Vector2(size.x / 2.0, 2.0), Vector2(size.x / 2.0, size.y - 2.0), Color(1, 1, 1, 0.8), 2.0)
+
+
 var root: Control
+var compass: Compass
 var hearts: Hearts
 var ring: Ring
 var state_label: Label
@@ -56,6 +246,10 @@ var toasts: VBoxContainer
 var goals_box: VBoxContainer
 var hurt_rect: ColorRect
 var recipes_box: VBoxContainer
+var pack_grid: GridContainer
+var inv_hotbar: HBoxContainer
+var bin_slot: Panel
+var cursor_icon: Control
 var start_title: Label
 var play_button: Button
 var screens := {}
@@ -101,8 +295,13 @@ func _ready() -> void:
 
 	hearts = Hearts.new()
 	hearts.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_place(hearts, 0, 0, 0, 0, 16, 14, 176, 46)
+	_place(hearts, 0, 0, 0, 0, 16, 14, 260, 46)
 	root.add_child(hearts)
+
+	compass = Compass.new()
+	compass.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_place(compass, 0.5, 0, 0.5, 0, -190, 12, 190, 46)
+	root.add_child(compass)
 
 	state_label = Label.new()
 	state_label.add_theme_color_override("font_color", ACCENT)
@@ -177,6 +376,7 @@ func _ready() -> void:
 
 	_build_start_screen()
 	_build_craft_screen()
+	_build_inventory_screen()
 	_build_dead_screen()
 
 
@@ -266,7 +466,7 @@ func _make_screen(key: String, title: String, body: String) -> VBoxContainer:
 
 
 func _build_start_screen() -> void:
-	var box := _make_screen("start", "Adventure Plus", "Gather and build in the meadows of Hearthvale, then climb into the windswept Gale Steppes, where something stirs inside the great mesa. Talk to Bryn at the camp to begin.")
+	var box := _make_screen("start", "Adventure Plus", "Gather and build in the meadows of Hearthvale, help the villagers, solve the Loomwright shrine and climb into the windswept Gale Steppes, where something stirs inside the great mesa. Talk to Bryn at the camp to begin.")
 	var grid := GridContainer.new()
 	grid.columns = 2
 	grid.add_theme_constant_override("h_separation", 14)
@@ -278,8 +478,10 @@ func _build_start_screen() -> void:
 		["Left click", "Hold to break a block, click to attack"],
 		["Right click", "Place the selected block"],
 		["1 to 9, wheel", "Choose a hotbar slot"],
-		["F", "Talk, read, use"],
+		["F", "Talk, read, use, open, push a crate"],
+		["Q", "Switch the quest shown on screen"],
 		["C", "Open crafting"],
+		["E or I", "Open your inventory"],
 		["V", "Switch between third and first person"],
 		["Esc", "Pause"],
 	]
@@ -318,13 +520,114 @@ func _slider(value: float) -> HSlider:
 
 
 func _build_craft_screen() -> void:
-	var box := _make_screen("craft", "Crafting", "Recipes use what is in your hotbar.")
+	var box := _make_screen("craft", "Crafting", "Recipes use what is in your inventory. Some need a workbench nearby.")
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(500, 430)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	box.add_child(scroll)
 	recipes_box = VBoxContainer.new()
 	recipes_box.add_theme_constant_override("separation", 8)
-	box.add_child(recipes_box)
+	recipes_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(recipes_box)
 	var close := _button("Back to the world")
 	close.pressed.connect(func() -> void: craft_closed.emit())
 	box.add_child(close)
+
+
+func _build_inventory_screen() -> void:
+	var box := _make_screen("inv", "Inventory", "Click to pick up a stack and click again to put it down. Right-click takes half, or puts down one. Shift-click moves a stack between your pack and the hotbar. Drop a stack on the bin to throw it away.")
+	box.add_child(_label("PACK", 12, ACCENT))
+	pack_grid = GridContainer.new()
+	pack_grid.columns = 9
+	pack_grid.add_theme_constant_override("h_separation", 6)
+	pack_grid.add_theme_constant_override("v_separation", 6)
+	box.add_child(pack_grid)
+	box.add_child(_label("HOTBAR", 12, ACCENT))
+	inv_hotbar = HBoxContainer.new()
+	inv_hotbar.add_theme_constant_override("separation", 6)
+	box.add_child(inv_hotbar)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	bin_slot = Panel.new()
+	bin_slot.custom_minimum_size = Vector2(52, 52)
+	bin_slot.add_theme_stylebox_override("panel", _style(Color(0.35, 0.12, 0.1, 0.85), 8, 0, 0, DANGER, 2))
+	bin_slot.tooltip_text = "Bin: drop a stack here to throw it away"
+	var bl := _label("BIN", 12, INK)
+	bl.position = Vector2(13, 17)
+	bin_slot.add_child(bl)
+	bin_slot.gui_input.connect(func(ev: InputEvent) -> void: _slot_input(ev, -1))
+	row.add_child(bin_slot)
+	var close := _button("Back to the world")
+	close.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	close.pressed.connect(func() -> void: inv_closed.emit())
+	row.add_child(close)
+	box.add_child(row)
+	cursor_icon = Control.new()
+	cursor_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cursor_icon.visible = false
+	cursor_icon.z_index = 10
+	root.add_child(cursor_icon)
+
+
+func _slot_input(ev: InputEvent, index: int) -> void:
+	if ev is InputEventMouseButton and ev.pressed:
+		var mb := ev as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_LEFT or mb.button_index == MOUSE_BUTTON_RIGHT:
+			inv_clicked.emit(index, mb.button_index, mb.shift_pressed)
+			get_viewport().set_input_as_handled()
+
+
+## One inventory square: a coloured swatch for the item and its count.
+func _slot_panel(s, items: Dictionary, border: Color, number := "") -> Panel:
+	var p := Panel.new()
+	p.custom_minimum_size = Vector2(52, 52)
+	p.add_theme_stylebox_override("panel", _style(PANEL, 8, 0, 0, border, 2))
+	if number != "":
+		var key := _label(number, 10, INK_DIM)
+		key.position = Vector2(5, 1)
+		key.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		p.add_child(key)
+	if s != null:
+		_add_stack(p, s, items)
+		p.tooltip_text = items[s["id"]]["name"]
+	return p
+
+
+func _add_stack(p: Control, s, items: Dictionary) -> void:
+	var icon := ItemIcon.new(s["id"], items[s["id"]])
+	icon.position = Vector2(8, 8)
+	p.add_child(icon)
+	var n: int = s["n"]
+	if n > 1:
+		var cl := _label(str(n), 13)
+		cl.position = Vector2(22, 30)
+		cl.size = Vector2(26, 18)
+		cl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		cl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
+		cl.add_theme_constant_override("outline_size", 4)
+		cl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		p.add_child(cl)
+
+
+## slots: all 36 (hotbar first), cursor: the stack held by the mouse or null.
+func render_inventory(slots: Array, cursor, items: Dictionary) -> void:
+	for c in pack_grid.get_children():
+		c.queue_free()
+	for c in inv_hotbar.get_children():
+		c.queue_free()
+	for i in slots.size():
+		var p := _slot_panel(slots[i], items, EDGE, str(i + 1) if i < 9 else "")
+		var idx := i
+		p.gui_input.connect(func(ev: InputEvent) -> void: _slot_input(ev, idx))
+		if i < 9:
+			inv_hotbar.add_child(p)
+		else:
+			pack_grid.add_child(p)
+	for c in cursor_icon.get_children():
+		c.queue_free()
+	cursor_icon.visible = cursor != null
+	if cursor != null:
+		_add_stack(cursor_icon, cursor, items)
 
 
 func _build_dead_screen() -> void:
@@ -348,8 +651,9 @@ func set_paused_title(paused: bool) -> void:
 	play_button.text = "Resume" if paused else "Play"
 
 
-func set_hearts(hp: int) -> void:
+func set_hearts(hp: int, max_hp := 10) -> void:
 	hearts.hp = hp
+	hearts.max_hp = max_hp
 	hearts.queue_redraw()
 
 
@@ -393,8 +697,9 @@ func show_item_name(text: String) -> void:
 	_name_timer = 1.6
 
 
-## steps: [{"text", "done"}] for the main quest, side: the same for side goals.
-func set_quest(title: String, steps: Array, side: Array) -> void:
+## steps: [{"text", "done"}] for the tracked quest, side: the same for side
+## goals, footer: a hint line under the quest (empty for none).
+func set_quest(title: String, steps: Array, side: Array, footer := "") -> void:
 	for c in goals_box.get_children():
 		c.queue_free()
 	goals_box.add_child(_label(title.to_upper(), 12, ACCENT))
@@ -407,6 +712,8 @@ func set_quest(title: String, steps: Array, side: Array) -> void:
 			shown_next = true
 		var l := _label(("✓ " if is_done else "➜ ") + str(g["text"]), 14, INK_DIM if is_done else INK, true)
 		goals_box.add_child(l)
+	if footer != "":
+		goals_box.add_child(_label(footer, 12, INK_DIM))
 	if not side.is_empty():
 		var gap := Control.new()
 		gap.custom_minimum_size = Vector2(0, 4)
@@ -415,6 +722,13 @@ func set_quest(title: String, steps: Array, side: Array) -> void:
 		for g in side:
 			var d: bool = g["done"]
 			goals_box.add_child(_label(("✓ " if d else "○ ") + str(g["text"]), 13, INK_DIM if d else INK, true))
+
+
+## heading: radians clockwise from north. markers: see Compass.
+func set_compass(heading: float, markers: Array) -> void:
+	compass.heading = heading
+	compass.markers = markers
+	compass.queue_redraw()
 
 
 func set_prompt(text: String) -> void:
@@ -447,29 +761,8 @@ func render_hotbar(slots: Array, sel: int, items: Dictionary) -> void:
 	for c in hotbar.get_children():
 		c.queue_free()
 	for i in slots.size():
-		var p := Panel.new()
-		p.custom_minimum_size = Vector2(52, 52)
+		var p := _slot_panel(slots[i], items, ACCENT if i == sel else EDGE, str(i + 1))
 		p.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var border := ACCENT if i == sel else EDGE
-		p.add_theme_stylebox_override("panel", _style(PANEL, 8, 0, 0, border, 2))
-		var key := _label(str(i + 1), 10, INK_DIM)
-		key.position = Vector2(5, 1)
-		p.add_child(key)
-		var s = slots[i]
-		if s != null:
-			var icon := ColorRect.new()
-			icon.color = items[s["id"]]["color"]
-			icon.position = Vector2(12, 12)
-			icon.size = Vector2(28, 28)
-			icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			p.add_child(icon)
-			var n: int = s["n"]
-			if n > 1:
-				var cl := _label(str(n), 13)
-				cl.position = Vector2(30, 30)
-				cl.size = Vector2(18, 18)
-				cl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-				p.add_child(cl)
 		hotbar.add_child(p)
 
 
@@ -481,9 +774,7 @@ func render_recipes(rows: Array) -> void:
 		var row: Dictionary = rows[i]
 		var hb := HBoxContainer.new()
 		hb.add_theme_constant_override("separation", 12)
-		var sw := ColorRect.new()
-		sw.color = row["color"]
-		sw.custom_minimum_size = Vector2(26, 26)
+		var sw := ItemIcon.new(row["id"], row["item"])
 		sw.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		hb.add_child(sw)
 		var info := VBoxContainer.new()
@@ -509,6 +800,8 @@ func render_recipes(rows: Array) -> void:
 
 
 func _process(delta: float) -> void:
+	if cursor_icon.visible:
+		cursor_icon.position = get_viewport().get_mouse_position() - Vector2(26, 26)
 	if _name_timer > 0.0:
 		_name_timer -= delta
 		if _name_timer <= 0.0:
