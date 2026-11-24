@@ -89,30 +89,66 @@ func _limb(at: Vector3) -> Node3D:
 
 func _build_model() -> void:
 	var tunic := Color("2f8f83")
+	var tunic_dk := Color("246f66")
 	var skin := Color("e8b48a")
 	var hair := Color("5a3a22")
+	var hair_lt := Color("6e4a2c")
 	var leather := Color("6b4a2b")
+	var trousers := Color("3b4a5c")
+	var gold := Color("f2b84b")
 	_hip_l = _limb(Vector3(-0.12, 0.8, 0))
 	_hip_r = _limb(Vector3(0.12, 0.8, 0))
 	for hp_node in [_hip_l, _hip_r]:
-		_box(Vector3(0.17, 0.72, 0.19), Color("3b4a5c"), Vector3(0, -0.36, 0), hp_node)
+		_box(Vector3(0.17, 0.5, 0.19), trousers, Vector3(0, -0.25, 0), hp_node)
+		# Boots with a turned-down cuff and a darker sole.
+		_box(Vector3(0.19, 0.24, 0.21), Color("5a3d26"), Vector3(0, -0.6, 0.01), hp_node)
+		_box(Vector3(0.21, 0.05, 0.23), Color("7a5634"), Vector3(0, -0.47, 0.01), hp_node)
 		_box(Vector3(0.19, 0.12, 0.26), Color("4a3424"), Vector3(0, -0.74, 0.03), hp_node)
+		_box(Vector3(0.2, 0.03, 0.27), Color("2c2018"), Vector3(0, -0.795, 0.03), hp_node)
+		_box(Vector3(0.12, 0.1, 0.02), Color("4b5d72"), Vector3(0, -0.28, 0.1), hp_node)
+	# Tunic with a darker hem, a collar and a belt with a brass buckle.
 	_box(Vector3(0.46, 0.58, 0.27), tunic, Vector3(0, 1.09, 0), self)
-	_box(Vector3(0.48, 0.08, 0.29), leather, Vector3(0, 0.83, 0), self)
-	_box(Vector3(0.5, 0.1, 0.31), Color("f2b84b"), Vector3(0, 1.36, 0), self)
-	_box(Vector3(0.1, 0.32, 0.04), Color("f2b84b"), Vector3(0.14, 1.2, -0.17), self)
+	_box(Vector3(0.48, 0.1, 0.29), tunic_dk, Vector3(0, 0.78, 0), self)
+	_box(Vector3(0.48, 0.08, 0.29), leather, Vector3(0, 0.88, 0), self)
+	_box(Vector3(0.1, 0.08, 0.02), gold, Vector3(0, 0.88, 0.15), self)
+	_box(Vector3(0.05, 0.04, 0.02), Color("6b4a2b"), Vector3(0, 0.88, 0.162), self)
+	_box(Vector3(0.14, 0.16, 0.05), Color("7a5634"), Vector3(-0.16, 0.82, 0.13), self)
+	_box(Vector3(0.16, 0.12, 0.02), Color("d8efe9"), Vector3(0, 1.31, 0.14), self)
+	_box(Vector3(0.5, 0.1, 0.31), gold, Vector3(0, 1.36, 0), self)
+	_box(Vector3(0.1, 0.32, 0.04), gold, Vector3(0.14, 1.2, -0.17), self)
+	_box(Vector3(0.12, 0.1, 0.04), gold.darkened(0.15), Vector3(0.14, 1.02, -0.17), self)
+	# Head: face, eyes with whites, brows, nose and a mouth.
 	_box(Vector3(0.34, 0.34, 0.32), skin, Vector3(0, 1.6, 0), self)
+	_box(Vector3(0.08, 0.04, 0.03), skin.darkened(0.12), Vector3(0, 1.57, 0.165), self)
+	_box(Vector3(0.1, 0.02, 0.02), Color("b5715a"), Vector3(0, 1.5, 0.165), self)
+	for ex in [-0.08, 0.08]:
+		_box(Vector3(0.07, 0.06, 0.02), Color("f4f1ea"), Vector3(ex, 1.63, 0.162), self)
+		_box(Vector3(0.035, 0.06, 0.02), Color("2a2a3a"), Vector3(ex + (0.015 if ex < 0 else -0.015), 1.63, 0.168), self)
+		_box(Vector3(0.08, 0.025, 0.02), hair, Vector3(ex, 1.68, 0.166), self)
+		_box(Vector3(0.05, 0.03, 0.01), Color("e89a82"), Vector3(ex * 1.45, 1.55, 0.163), self)
+	# Hair: crown, back, side locks and a fringe.
 	_box(Vector3(0.37, 0.12, 0.35), hair, Vector3(0, 1.79, 0), self)
 	_box(Vector3(0.37, 0.22, 0.07), hair, Vector3(0, 1.66, -0.15), self)
-	_box(Vector3(0.05, 0.06, 0.02), Color("1d1d1d"), Vector3(-0.08, 1.62, 0.165), self)
-	_box(Vector3(0.05, 0.06, 0.02), Color("1d1d1d"), Vector3(0.08, 1.62, 0.165), self)
+	_box(Vector3(0.05, 0.2, 0.3), hair, Vector3(-0.18, 1.68, -0.01), self)
+	_box(Vector3(0.05, 0.2, 0.3), hair, Vector3(0.18, 1.68, -0.01), self)
+	_box(Vector3(0.24, 0.06, 0.04), hair_lt, Vector3(-0.04, 1.73, 0.16), self)
+	_box(Vector3(0.1, 0.08, 0.1), hair_lt, Vector3(0.08, 1.87, 0.04), self)
+	# Backpack with a bedroll and straps.
 	_box(Vector3(0.34, 0.4, 0.16), Color("8a6a3e"), Vector3(0, 1.12, -0.21), self)
+	_box(Vector3(0.28, 0.14, 0.04), Color("7a5a34"), Vector3(0, 1.02, -0.3), self)
 	_box(Vector3(0.36, 0.08, 0.18), leather, Vector3(0, 1.33, -0.21), self)
+	_box(Vector3(0.42, 0.12, 0.12), Color("b0453a"), Vector3(0, 1.44, -0.24), self)
+	_box(Vector3(0.43, 0.13, 0.03), Color("e6d3a8"), Vector3(0, 1.44, -0.24), self)
+	for strap_x in [-0.12, 0.12]:
+		_box(Vector3(0.05, 0.4, 0.02), leather, Vector3(strap_x, 1.12, 0.14), self)
 	_sh_l = _limb(Vector3(-0.31, 1.34, 0))
 	_sh_r = _limb(Vector3(0.31, 1.34, 0))
 	for sh in [_sh_l, _sh_r]:
-		_box(Vector3(0.13, 0.56, 0.15), tunic, Vector3(0, -0.26, 0), sh)
-		_box(Vector3(0.12, 0.12, 0.12), skin, Vector3(0, -0.58, 0), sh)
+		_box(Vector3(0.13, 0.4, 0.15), tunic, Vector3(0, -0.18, 0), sh)
+		_box(Vector3(0.14, 0.06, 0.16), tunic_dk, Vector3(0, -0.36, 0), sh)
+		_box(Vector3(0.12, 0.14, 0.14), skin, Vector3(0, -0.45, 0), sh)
+		# Leather gloves.
+		_box(Vector3(0.13, 0.13, 0.13), Color("7a5634"), Vector3(0, -0.58, 0), sh)
 	held = Node3D.new()
 	held.position = Vector3(0, -0.6, 0.05)
 	held.rotation.y = PI
@@ -139,28 +175,45 @@ func set_wings() -> void:
 			c.scale.x = 1.25
 
 
-## Shows the selected item in the hero's right hand.
-func set_held(item: Dictionary) -> void:
+## Shows the selected item in the hero's right hand, as its 3D model.
+func set_held(item: Dictionary, mesh: Mesh = null) -> void:
 	for c in held.get_children():
 		c.queue_free()
-	if item.is_empty():
+	if item.is_empty() or mesh == null:
 		return
-	var col: Color = item["color"]
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	if item.has("block"):
-		_box(Vector3(0.15, 0.15, 0.15), col, Vector3.ZERO, held)
-	elif item.has("damage") or item.has("pick") or item["name"] == "Stick":
-		var tool := Node3D.new()
-		tool.rotation.x = -0.5
-		held.add_child(tool)
-		var handle := _box(Vector3(0.04, 0.04, 0.2), Color("7a5a34"), Vector3(0, 0, 0.05), tool)
-		if item.has("damage"):
-			_box(Vector3(0.05, 0.02, 0.5), col, Vector3(0, 0, -0.3), tool)
-			_box(Vector3(0.16, 0.04, 0.04), col, Vector3(0, 0, -0.05), tool)
-		if item.has("pick"):
-			_box(Vector3(0.32, 0.05, 0.06), col, Vector3(0, 0, -0.08), tool)
-			handle.scale.z = 1.6
+		if item["block"] == World.LANTERN:
+			# Carried by its handle, hanging a little out from the leg.
+			mi.scale = Vector3(0.55, 0.55, 0.55)
+			mi.position = Vector3(-0.06, -0.17, 0.02)
+		else:
+			# Blocks sit in the palm.
+			mi.scale = Vector3(0.26, 0.26, 0.26)
+			mi.position = Vector3(0, -0.04, -0.1)
+			mi.rotation = Vector3(0.2, 0.5, 0)
+		held.add_child(mi)
+		return
+	# Pixel-art items: the grip (lower left of the picture) is in the hand,
+	# the blade or head points forward and up, flat side out.
+	var tool: bool = item.has("damage") or item.has("pick") or item["name"] == "Stick"
+	var pivot := Node3D.new()
+	held.add_child(pivot)
+	var sc := 0.8 if tool else 0.38
+	if tool:
+		pivot.basis = Basis(Vector3(0, 0.71, -0.71), Vector3(0, 0.71, 0.71), Vector3(1, 0, 0))
+		pivot.position = Vector3(0, -0.02, -0.02)
 	else:
-		_box(Vector3(0.14, 0.14, 0.03), col, Vector3.ZERO, held)
+		pivot.basis = Basis(Vector3(0, 0, -1), Vector3(0, 1, 0), Vector3(1, 0, 0))
+		pivot.position = Vector3(0, -0.12, -0.06)
+	pivot.add_child(mi)
+	mi.scale = Vector3(sc, sc, sc)
+	if tool:
+		mi.rotation.z = -PI / 4.0
+		var grip := Vector3(-0.37, -0.37, 0)
+		mi.position = -(Basis(Vector3(0, 0, 1), -PI / 4.0) * grip) * sc
 
 
 # ---------------------------------------------------------------- helpers

@@ -56,6 +56,31 @@ func _ready() -> void:
 		mi.rotation.z = -float(s[3])
 		add_child(mi)
 
+	# Mottled bark patches, a leafy sprout, a toothy mouth and stubby feet.
+	var patch_mat := StandardMaterial3D.new()
+	patch_mat.albedo_color = Color("3f5031")
+	var light_mat := StandardMaterial3D.new()
+	light_mat.albedo_color = Color("6a7f4d")
+	for pt in [[Vector3(0.22, 0.15, 0.405), Vector3(0.2, 0.16, 0.02), patch_mat], [Vector3(-0.25, -0.12, 0.405), Vector3(0.16, 0.12, 0.02), patch_mat],
+			[Vector3(0.405, 0.05, 0.1), Vector3(0.02, 0.22, 0.26), patch_mat], [Vector3(-0.405, 0.12, -0.15), Vector3(0.02, 0.16, 0.2), light_mat],
+			[Vector3(0.0, 0.355, 0.0), Vector3(0.5, 0.02, 0.5), light_mat], [Vector3(0.1, -0.2, -0.405), Vector3(0.3, 0.14, 0.02), patch_mat]]:
+		_part(pt[1], pt[2], pt[0], _body)
+	var mouth_mat := StandardMaterial3D.new()
+	mouth_mat.albedo_color = Color("2a1a14")
+	_part(Vector3(0.36, 0.1, 0.02), mouth_mat, Vector3(0, -0.12, 0.41), _body)
+	var tooth_mat := StandardMaterial3D.new()
+	tooth_mat.albedo_color = Color("efe6c8")
+	for tx in [-0.12, -0.04, 0.04, 0.12]:
+		_part(Vector3(0.05, 0.05, 0.02), tooth_mat, Vector3(tx, -0.08 if int(tx * 100) % 8 == 0 else -0.15, 0.418), _body)
+	var leaf_mat := StandardMaterial3D.new()
+	leaf_mat.albedo_color = Color("7bc04a")
+	_part(Vector3(0.04, 0.2, 0.04), thorn_mat, Vector3(0.05, 0.47, 0.05), _body)
+	_part(Vector3(0.2, 0.04, 0.12), leaf_mat, Vector3(0.14, 0.57, 0.05), _body)
+	_part(Vector3(0.12, 0.04, 0.18), leaf_mat, Vector3(-0.02, 0.6, 0.1), _body)
+	for fx in [-0.22, 0.22]:
+		for fz in [-0.2, 0.2]:
+			_part(Vector3(0.16, 0.08, 0.18), patch_mat, Vector3(fx, 0.04, fz + 0.03), self)
+
 	var eye_mat := StandardMaterial3D.new()
 	eye_mat.albedo_color = Color("ffa630")
 	eye_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -67,6 +92,22 @@ func _ready() -> void:
 		eye.mesh = em
 		eye.position = Vector3(ex, 0.45, 0.41)
 		add_child(eye)
+		var pupil_mat := StandardMaterial3D.new()
+		pupil_mat.albedo_color = Color("2a1208")
+		pupil_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_part(Vector3(0.05, 0.08, 0.02), pupil_mat, Vector3(ex * 0.85, 0.45, 0.43), self)
+		_part(Vector3(0.16, 0.03, 0.03), thorn_mat, Vector3(ex, 0.53, 0.42), self).rotation.z = 0.35 if ex < 0 else -0.35
+
+
+func _part(size: Vector3, mat: Material, at: Vector3, parent: Node3D) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = size
+	bm.material = mat
+	mi.mesh = bm
+	mi.position = at
+	parent.add_child(mi)
+	return mi
 
 
 func place_on_ground(world: World) -> void:

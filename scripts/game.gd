@@ -10,6 +10,7 @@ const Thornling = preload("res://scripts/thornling.gd")
 const Hud = preload("res://scripts/hud.gd")
 const Audio = preload("res://scripts/audio.gd")
 const Npc = preload("res://scripts/npc.gd")
+const Art = preload("res://scripts/art.gd")
 
 var items := {
 	"dirt": {"name": "Dirt", "color": Color("865e3b"), "block": World.DIRT},
@@ -226,6 +227,21 @@ var _bridge_t := 0.0
 var _wren_moved := false
 var _heavy_hint := false
 
+var _sun: DirectionalLight3D
+var _env: Environment
+var _sky_mat: ShaderMaterial
+## Lights that make the hero, villagers and Thornlings glow near lanterns
+## (the blocks have the lantern light baked in).
+var _lamp_lights: Array = []
+var _hand_light: OmniLight3D
+var _lamp_t := 0.0
+var _hand_glow := 0.0
+var _dark := 0.0
+## Items popping out of broken blocks and flying to the hero.
+var _drops: Array = []
+var _shadows: Array = []
+var _shadow_mesh: QuadMesh
+var icons_baked := false
 var _beacon: MeshInstance3D
 var _water: MeshInstance3D
 var _sea_floor: MeshInstance3D
@@ -312,6 +328,7 @@ func _ready() -> void:
 
 	_make_beacon()
 	_make_markers()
+	_make_lights()
 	for i in 6:
 		var spot := enemy_spot()
 		var e := Thornling.new()
@@ -331,6 +348,12 @@ func _ready() -> void:
 	player.animate(0.0)
 	player.update_camera(0.0)
 	hud.show_screen("start")
+	_add_shadow(player, 0.42)
+	for n in npcs:
+		_add_shadow(n, 0.4)
+	for e in enemies:
+		_add_shadow(e, 0.5)
+	_bake_icons()
 	audio.play_music("hearthvale")
 	audio.play_ambience("meadow")
 	region = "hearthvale"
@@ -339,28 +362,41 @@ func _ready() -> void:
 # ---------------------------------------------------------------- scene setup
 
 func _setup_environment() -> void:
-	var sky := Color("9fd4ff")
-	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.82, 0.88, 0.95)
-	env.ambient_light_energy = 0.7
-	env.fog_enabled = true
-	env.fog_light_color = sky
+	var horizon := Color("b4dcff")
+	_env = Environment.new()
+	_env.background_mode = Environment.BG_SKY
+	var sky := Sky.new()
+	_sky_mat = ShaderMaterial.new()
+	var sh := Shader.new()
+	sh.code = Art.SKY_SHADER
+	_sky_mat.shader = sh
+	_sky_mat.set_shader_parameter("horizon_color", horizon)
+	_sky_mat.set_shader_parameter("top_color", Color("5d9df5"))
+	_sky_mat.set_shader_parameter("ground_color", Color("8fb3cc"))
+	sky.sky_material = _sky_mat
+	sky.radiance_size = Sky.RADIANCE_SIZE_32
+	_env.sky = sky
+	_env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	_env.ambient_light_color = Color(0.82, 0.88, 0.95)
+	_env.ambient_light_energy = 0.7
+	_env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
+	_env.fog_enabled = true
+	_env.fog_light_color = horizon
+	_env.fog_sky_affect = 0.0
 	# Depth fog hides where the loaded world ends.
-	env.fog_mode = Environment.FOG_MODE_DEPTH
-	env.fog_depth_begin = 70.0
-	env.fog_depth_end = float(World.VIEW * World.CH) - 8.0
-	env.fog_depth_curve = 1.3
+	_env.fog_mode = Environment.FOG_MODE_DEPTH
+	_env.fog_depth_begin = 70.0
+	_env.fog_depth_end = float(World.VIEW * World.CH) - 8.0
+	_env.fog_depth_curve = 1.3
 	var we := WorldEnvironment.new()
-	we.environment = env
+	we.environment = _env
 	add_child(we)
 
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-55, 35, 0)
-	sun.light_energy = 0.9
-	add_child(sun)
+	_sun = DirectionalLight3D.new()
+	_sun.rotation_degrees = Vector3(-55, 35, 0)
+	_sun.light_energy = 0.9
+	add_child(_sun)
+	_sky_mat.set_shader_parameter("sun_dir", _sun.global_transform.basis.z)
 
 
 func _flat_mat(color: Color, alpha := 1.0) -> StandardMaterial3D:
@@ -378,7 +414,11 @@ func _add_water() -> void:
 	var water := MeshInstance3D.new()
 	var pm := PlaneMesh.new()
 	pm.size = Vector2(700, 700)
-	pm.material = _flat_mat(Color("3d8fc9"), 0.72)
+	var wm := ShaderMaterial.new()
+	var ws := Shader.new()
+	ws.code = Art.WATER_SHADER
+	wm.shader = ws
+	pm.material = wm
 	water.mesh = pm
 	water.position = center + Vector3(0, World.WATER_SURF, 0)
 	add_child(water)
@@ -437,6 +477,215 @@ func _make_markers() -> void:
 	_crack.mesh = bm
 	_crack.visible = false
 	add_child(_crack)
+
+
+# ---------------------------------------------------------------- looks
+
+## The 3D model of an item: its block (textured, or a small model like a
+## lantern) or its pixel art pressed into a thick sprite.
+func item_mesh(id: String, for_icon := false) -> ArrayMesh:
+	var it: Dictionary = items[id]
+	if it.has("block"):
+		var look := world.block_look(it["block"])
+		return world.art.item_mesh(id, look["kind"], look["what"], Color.WHITE, for_icon)
+	var rows := Art.art_rows(id)
+	if rows.is_empty():
+		rows = Art.ART["lump"]
+	return world.art.item_mesh(id, "sprite", rows, it["color"], for_icon)
+
+
+## Warm lights that follow the nearest lanterns, so the hero and creatures
+## near one are lit by it too, and one for a lantern held in the hand.
+func _make_lights() -> void:
+	for i in 4:
+		var l := OmniLight3D.new()
+		l.light_color = Color(1.0, 0.76, 0.46)
+		l.light_energy = 1.6
+		l.omni_range = 8.0
+		l.omni_attenuation = 1.3
+		l.visible = false
+		add_child(l)
+		_lamp_lights.append(l)
+	_hand_light = OmniLight3D.new()
+	_hand_light.light_color = Color(1.0, 0.74, 0.42)
+	_hand_light.light_energy = 1.4
+	_hand_light.omni_range = 7.0
+	_hand_light.omni_attenuation = 1.4
+	_hand_light.visible = false
+	add_child(_hand_light)
+
+
+func _update_lights(dt: float) -> void:
+	_lamp_t -= dt
+	if _lamp_t <= 0.0:
+		_lamp_t = 0.25
+		var near := world.lights_near(player.pos, 16)
+		for i in _lamp_lights.size():
+			var l: OmniLight3D = _lamp_lights[i]
+			l.visible = i < near.size()
+			if l.visible:
+				l.position = Vector3(near[i]) + Vector3(0.5, 0.45, 0.5)
+	# A lantern in the hand lights the blocks around you as well.
+	var holding := false
+	var s = slots[sel]
+	if s != null and s["id"] == "lantern":
+		holding = true
+	_hand_glow = move_toward(_hand_glow, 1.0 if holding else 0.0, dt * 4.0)
+	var hp := player.held.global_position if player.is_inside_tree() and player.visible else player.pos + Vector3(0, 1.2, 0)
+	_hand_light.visible = _hand_glow > 0.01
+	_hand_light.global_position = hp + Vector3(0, 0.15, 0)
+	_hand_light.light_energy = 1.4 * _hand_glow
+	for m in [world.art.terrain_mat, world.art.plant_mat]:
+		m.set_shader_parameter("hand_pos", hp)
+		m.set_shader_parameter("hand_strength", 0.9 * _hand_glow)
+	# Underground the sun can't reach you: characters darken like the caves.
+	var want := 1.0 if (started and underground()) else 0.0
+	_dark = move_toward(_dark, want, dt * 1.5)
+	_sun.light_energy = lerpf(0.9, 0.12, _dark)
+	_env.ambient_light_energy = lerpf(0.7, 0.22, _dark)
+
+
+## A soft round shadow on the ground under something that moves.
+func _add_shadow(who: Node3D, radius: float) -> void:
+	if _shadow_mesh == null:
+		var g := Gradient.new()
+		g.set_color(0, Color(0, 0, 0, 0.42))
+		g.set_color(1, Color(0, 0, 0, 0.0))
+		var gt := GradientTexture2D.new()
+		gt.gradient = g
+		gt.fill = GradientTexture2D.FILL_RADIAL
+		gt.fill_from = Vector2(0.5, 0.5)
+		gt.fill_to = Vector2(1.0, 0.5)
+		gt.width = 32
+		gt.height = 32
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.albedo_texture = gt
+		m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		_shadow_mesh = QuadMesh.new()
+		_shadow_mesh.size = Vector2(1, 1)
+		_shadow_mesh.orientation = PlaneMesh.FACE_Y
+		_shadow_mesh.material = m
+	var mi := MeshInstance3D.new()
+	mi.mesh = _shadow_mesh
+	mi.scale = Vector3(radius * 2.0, 1, radius * 2.0)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mi)
+	_shadows.append([who, mi, radius])
+
+
+func _update_shadows() -> void:
+	for sh in _shadows:
+		var who: Node3D = sh[0]
+		var mi: MeshInstance3D = sh[1]
+		var p: Vector3 = who.get("pos")
+		var alive = who.get("alive")
+		mi.visible = who.visible and (alive == null or alive) and not (who == player and player.first_person)
+		if not mi.visible:
+			continue
+		var x := floori(p.x)
+		var z := floori(p.z)
+		var y := floori(p.y + 0.05)
+		var lowest := maxi(0, y - 8)
+		while y > lowest and world.get_b(x, y - 1, z) == World.AIR:
+			y -= 1
+		var gap := p.y - y
+		mi.visible = gap < 7.0
+		var f := clampf(1.0 - gap / 7.0, 0.2, 1.0)
+		mi.position = Vector3(p.x, y + 0.03, p.z)
+		mi.scale = Vector3(sh[2] * 2.0 * (0.6 + 0.4 * f), 1, sh[2] * 2.0 * (0.6 + 0.4 * f))
+
+
+## An item model pops out of a broken block, then flies to the hero.
+func _spawn_drop(id: String, at: Vector3) -> void:
+	var mi := MeshInstance3D.new()
+	mi.mesh = item_mesh(id)
+	var it: Dictionary = items[id]
+	var sc := 0.32 if it.has("block") else 0.42
+	mi.scale = Vector3(sc, sc, sc)
+	mi.position = at
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mi)
+	var v := Vector3(_rng.randf_range(-1.0, 1.0), 4.2, _rng.randf_range(-1.0, 1.0))
+	_drops.append({"node": mi, "t": 0.0, "v": v})
+	while _drops.size() > 16:
+		var old: Dictionary = _drops.pop_front()
+		(old["node"] as Node).queue_free()
+
+
+func _update_drops(dt: float) -> void:
+	var i := 0
+	while i < _drops.size():
+		var d: Dictionary = _drops[i]
+		var mi: MeshInstance3D = d["node"]
+		d["t"] += dt
+		var t: float = d["t"]
+		mi.rotation.y += dt * 4.0
+		if t < 0.45:
+			var v: Vector3 = d["v"]
+			v.y -= 14.0 * dt
+			d["v"] = v
+			mi.position += v * dt
+		else:
+			var target := player.pos + Vector3(0, 1.0, 0)
+			mi.position = mi.position.lerp(target, minf(1.0, dt * 10.0))
+			mi.scale *= 0.96
+			if mi.position.distance_to(target) < 0.35 or t > 1.2:
+				mi.queue_free()
+				_drops.remove_at(i)
+				continue
+		i += 1
+
+
+## Renders a 3D picture of every block item for the hotbar and inventory.
+func _bake_icons() -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	var holder := Node.new()
+	add_child(holder)
+	var vps := {}
+	var dir := Vector3(0.612, 0.5, 0.612).normalized()
+	for id in items:
+		var it: Dictionary = items[id]
+		if not it.has("block"):
+			continue
+		var vp := SubViewport.new()
+		vp.size = Vector2i(72, 72)
+		vp.own_world_3d = true
+		vp.transparent_bg = true
+		vp.msaa_3d = Viewport.MSAA_4X
+		vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+		var mesh := item_mesh(id, true)
+		var mi := MeshInstance3D.new()
+		mi.mesh = mesh
+		var bb := mesh.get_aabb()
+		var big := maxf(bb.size.x, maxf(bb.size.y, bb.size.z))
+		var sc := (1.0 if world.block_look(it["block"])["kind"] == "block" else 1.3) / maxf(big, 0.01)
+		mi.scale = Vector3(sc, sc, sc)
+		mi.position = -bb.get_center() * sc
+		vp.add_child(mi)
+		var cam := Camera3D.new()
+		cam.projection = Camera3D.PROJECTION_ORTHOGONAL
+		cam.size = 1.78
+		cam.position = dir * 6.0
+		vp.add_child(cam)
+		cam.look_at_from_position(dir * 6.0, Vector3.ZERO, Vector3.UP)
+		holder.add_child(vp)
+		vps[id] = vp
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	if not is_inside_tree():
+		return
+	for id in vps:
+		var img: Image = (vps[id] as SubViewport).get_texture().get_image()
+		if img != null and not img.is_empty():
+			Hud.ItemIcon.baked[id] = ImageTexture.create_from_image(img)
+	holder.queue_free()
+	icons_baked = true
+	_render_hotbar()
+	if hud.screens["craft"].visible:
+		hud.render_recipes(_recipe_rows())
 
 
 ## A random grassy spot away from the player, the camp and the mesas. Out in
@@ -520,7 +769,8 @@ func _render_hotbar() -> void:
 	hud.render_hotbar(slots.slice(0, HOTBAR), sel, items)
 	if hud.screens["inv"].visible:
 		hud.render_inventory(slots, cursor, items)
-	player.set_held(sel_item())
+	var s = slots[sel]
+	player.set_held(sel_item(), item_mesh(s["id"]) if s != null else null)
 
 
 func select_slot(i: int) -> void:
@@ -1122,6 +1372,9 @@ func _process(delta: float) -> void:
 	_sea_floor.position.z = _water.position.z
 	_update_region(dt)
 	_update_vents(dt)
+	_update_lights(dt)
+	_update_shadows()
+	_update_drops(dt)
 
 	var st := player.stamina / player.max_stamina
 	hud.set_stamina(st, player.exhausted or st < 0.25)
@@ -1729,6 +1982,7 @@ func _update_interaction(dt: float) -> void:
 				audio.play_at(break_sound.get(b, "break_soft"), Vector3(bp) + Vector3(0.5, 0.5, 0.5), -2.0)
 				if drops.has(b):
 					add_item(drops[b], 1)
+					_spawn_drop(drops[b], Vector3(bp) + Vector3(0.5, 0.5, 0.5))
 				if b == World.CRYSTAL:
 					complete("shard")
 					_beacon.visible = false

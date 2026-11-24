@@ -61,6 +61,32 @@ const IRON_ORE := 36
 const SUNSTONE := 37
 const FURNACE := 38
 
+## How far lantern light reaches (blocks, walking distance around corners).
+const LIGHT_R := 10
+const LS := LIGHT_R * 2 + 1
+
+const Art = preload("res://scripts/art.gd")
+
+## Texture names for each plain block: one for every face, or [top, side, bottom].
+const LOOKS := {
+	GRASS: ["grass_top", "grass_side", "dirt"], DIRT: "dirt", STONE: "stone", SAND: "sand",
+	LOG: ["log_top", "log_side", "log_top"], LEAVES: "leaves", PLANKS: "planks",
+	DRYGRASS: ["drygrass_top", "drygrass_side", "dirt"], SKYGLASS: "skyglass",
+	LOOMSTONE: ["loom_top", "loom_side", "loom_bottom"], LOOMDOOR: "loomdoor", LOOMVEIN: "loomvein",
+	PLATE: "plate", PLATE_ON: "plate_on", NODE: "node", NODE_ON: "node_on",
+	VENT: ["vent_top", "vent_side", "vent_side"], LADDER: "ladder", BRICKS: "bricks",
+	THATCH: ["thatch_top", "thatch_side", "thatch_top"], CRATE: ["crate_top", "crate_side", "crate_top"],
+	SNOW: ["snow_top", "snow_side", "dirt"], CLAY: "clay", PINE: "pine",
+	COAL_ORE: "coal_ore", IRON_ORE: "iron_ore", SUNSTONE: "sunstone",
+	FURNACE: ["furnace_top", "furnace_side", "furnace_top"],
+}
+## Blocks drawn as small models instead of cubes (they still fill their
+## block for walking and climbing).
+const MODEL_OF := {
+	LANTERN: "lantern", CHEST: "chest", CHEST_OPEN: "chest_open", WORKBENCH: "workbench",
+	SPRING: "spring", FLAG: "flag", TABLET: "tablet", CRYSTAL: "crystal", CACTUS: "cactus",
+}
+
 ## Biomes of the wild lands, by id. region_at() returns these names.
 const BIOMES := ["sea", "plains", "forest", "desert", "badlands", "taiga", "peaks"]
 const B_SEA := 0
@@ -176,7 +202,7 @@ var _n_cavern := FastNoiseLite.new()
 ## Vector2i chunk -> {index in the chunk: block}. This is what a save keeps.
 var _edits := {}
 var _rng := RandomNumberGenerator.new()
-var _material := StandardMaterial3D.new()
+var _material: Material
 # Lookup tables for meshing on worker threads (read only once built).
 var _pal := PackedColorArray()
 ## Per block: 1 glows, 2 is an ore (drawn speckled), 3 both.
@@ -185,6 +211,29 @@ var _glow := PackedByteArray()
 var _see := PackedByteArray()
 var _face_n := PackedInt32Array()
 var _face_ao := PackedInt32Array()
+## Per block and face kind (top, side, bottom): its texture layer.
+var _face_layer := PackedInt32Array()
+## Per block: 1 if it fills its whole block and hides what is behind it.
+var _opaque := PackedByteArray()
+## Per block: 1 if lantern light spreads through it.
+var _lpass := PackedByteArray()
+## Per block: which of _models draws it, or -1 for a plain cube.
+var _model_of := PackedInt32Array()
+var _models: Array = []
+var _lantern_hang := 0
+## Per block: what grows on top of it (0 nothing, 1 grass, 2 dry grass, 3 sand).
+var _plant_of := PackedByteArray()
+var _plant_lay := PackedInt32Array()
+var _front_lay := 0
+## Brightness of each lantern light level.
+var _light_i := PackedFloat32Array()
+## How every block, item and the water and sky look.
+var art: Art
+## Lanterns: Vector2i chunk -> Array of Vector3i positions.
+var _lights := {}
+## Lantern light already worked out: Vector3i lantern -> PackedByteArray of
+## light levels in the LS^3 box around it.
+var _lfields := {}
 
 # Other mesas on the Steppes: [x, z, radius, top].
 var _mesas := [
@@ -296,6 +345,8 @@ func set_block(x: int, y: int, z: int, b: int) -> void:
 		vents.erase(Vector3i(x, y, z))
 	if b == VENT:
 		vents[Vector3i(x, y, z)] = 14
+	if not _flat and (old == LANTERN or b == LANTERN or not _lights.is_empty()):
+		_relight(Vector3i(x, y, z), old == LANTERN, b == LANTERN)
 	var top: PackedInt32Array = _ctop[k]
 	if b != AIR and y > top[ci]:
 		top[ci] = y
@@ -531,10 +582,9 @@ func generate() -> void:
 	_flat = false
 	data = PackedByteArray()
 
-	_material.vertex_color_use_as_albedo = true
-	_material.vertex_color_is_srgb = true
-	_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	for cz in range(D / CH):
+		for cx in range(W / CH):
+			_scan_lights(Vector2i(cx, cz))
 	for cz in range(D / CH):
 		for cx in range(W / CH):
 			_mesh_main(Vector2i(cx, cz))
@@ -636,6 +686,10 @@ func _build_camp(h: int) -> void:
 			_set_raw(x0 + 5, y, z0 + i, LOG if i == 0 or i == 5 else PLANKS)
 	_fill(x0 - 1, h + 4, z0 - 1, x0 + 6, h + 4, z0 + 6, LOG)
 	_fill(x0, h + 5, z0, x0 + 5, h + 5, z0 + 5, PLANKS)
+	# Lanterns by the door and one hanging inside.
+	_set_raw(x0 + 6, h + 1, z0 + 1, LANTERN)
+	_set_raw(x0 + 6, h + 1, z0 + 4, LANTERN)
+	_set_raw(x0 + 2, h + 3, z0 + 3, LANTERN)
 	# Log seats around a stone fire ring.
 	_set_raw(CAMP_X + 3, h + 1, CAMP_Z + 4, STONE)
 	_set_raw(CAMP_X + 1, h + 1, CAMP_Z + 4, LOG)
@@ -1026,6 +1080,9 @@ func _hash3(x: int, y: int, z: int) -> float:
 ## Fills the lookup tables the mesher uses, so it never touches a
 ## Dictionary (it runs on worker threads).
 func _build_tables() -> void:
+	if art == null:
+		art = Art.new()
+	_material = art.terrain_mat
 	_pal.resize(256 * 3)
 	_glow.resize(256)
 	_glow.fill(0)
@@ -1036,12 +1093,47 @@ func _build_tables() -> void:
 			_pal[b * 3 + k] = pal["all"] if pal.has("all") else pal.get(kind, pal["side"])
 	for b in GLOWING:
 		_glow[b] = 1
+	# Sunstone glows only in its flecks (drawn by its texture).
+	_glow[SUNSTONE] = 0
 	_see.resize(256)
 	_see.fill(0)
 	for b in SEE_THROUGH:
 		_see[b] = 1
-	for b in ORES:
-		_glow[b] = 2 if _glow[b] == 0 else 3
+	# Textures for each block's top, sides and bottom.
+	_face_layer.resize(256 * 3)
+	_face_layer.fill(art.lay("white"))
+	for b in LOOKS:
+		var l = LOOKS[b]
+		var trio: Array = l if l is Array else [l, l, l]
+		for k in 3:
+			_face_layer[b * 3 + k] = art.lay(trio[k])
+	_opaque.resize(256)
+	_opaque.fill(1)
+	_opaque[AIR] = 0
+	_lpass.resize(256)
+	_lpass.fill(0)
+	_lpass[AIR] = 1
+	_model_of.resize(256)
+	_model_of.fill(-1)
+	_models.clear()
+	for b in MODEL_OF:
+		_model_of[b] = _add_model(MODEL_OF[b])
+		_opaque[b] = 0
+		_lpass[b] = 1
+	_lantern_hang = _add_model("lantern_hang")
+	for b in [LEAVES, PINE]:
+		_lpass[b] = 1
+	_plant_of.resize(256)
+	_plant_of.fill(0)
+	_plant_of[GRASS] = 1
+	_plant_of[DRYGRASS] = 2
+	_plant_of[SAND] = 3
+	_plant_lay = PackedInt32Array([art.lay("tuft"), art.lay("tuft_dry"), art.lay("fern"), art.lay("deadbush"),
+		art.lay("flower_red"), art.lay("flower_yellow"), art.lay("flower_blue"), art.lay("flower_white")])
+	_front_lay = art.lay("furnace_front")
+	_light_i.resize(LIGHT_R + 1)
+	for i in LIGHT_R + 1:
+		_light_i[i] = pow(float(i) / LIGHT_R, 1.35)
 	# For each face: the neighbour's offset in a padded volume (dy, dx, dz),
 	# then per corner the three blocks that darken it.
 	_face_n.clear()
@@ -1063,14 +1155,49 @@ func _build_tables() -> void:
 				_face_ao.append_array(PackedInt32Array([ov.y, ov.x, ov.z]))
 
 
+## Turns one of the art's block models into boxes the mesher can use:
+## [corner a, corner b (in blocks), PackedInt32Array([top, side, bottom] layers), glows].
+func _add_model(name: String) -> int:
+	var boxes := []
+	for bx in Art.MODELS[name]:
+		var t = bx[6]
+		var ls := PackedInt32Array([art.lay(t[0]), art.lay(t[1]), art.lay(t[2])]) if t is Array else PackedInt32Array([art.lay(t), art.lay(t), art.lay(t)])
+		boxes.append([Vector3(bx[0], bx[1], bx[2]) / 16.0, Vector3(bx[3], bx[4], bx[5]) / 16.0, ls, bx[7]])
+	_models.append(boxes)
+	return _models.size() - 1
+
+
+## What an item made from block b looks like: {"kind": "block", "what":
+## [top, side, bottom] layers} or {"kind": "model", "what": model name}.
+func block_look(b: int) -> Dictionary:
+	if MODEL_OF.has(b):
+		return {"kind": "model", "what": MODEL_OF[b] if b != LADDER else "ladder_item"}
+	if b == LADDER:
+		return {"kind": "model", "what": "ladder_item"}
+	var l: Array = [_face_layer[b * 3], _face_layer[b * 3 + 1], _face_layer[b * 3 + 2]]
+	if b == FURNACE:
+		l[1] = _front_lay
+	return {"kind": "block", "what": l}
+
+
 ## Builds the mesh arrays for one chunk from a padded volume: (CH + 2)^2
 ## columns of H blocks, the chunk plus a one-block border, so faces and
-## shading at the edges are right. Safe to call on a worker thread.
-func _mesh_volume(vol: PackedByteArray, ox: int, oz: int) -> Array:
+## shading at the edges are right. Safe to call on a worker thread when
+## `lf` (light from nearby lanterns, see _light_fields_for) is empty.
+func _mesh_volume(vol: PackedByteArray, ox: int, oz: int, lf: Array = []) -> Array:
 	var pw := CH + 2
 	var verts := PackedVector3Array()
 	var cols := PackedColorArray()
+	var uvs := PackedVector2Array()
+	var uv2s := PackedVector2Array()
 	var inds := PackedInt32Array()
+	# Plants go in their own surface: only they need see-through pixels.
+	var pv := PackedVector3Array()
+	var pc := PackedColorArray()
+	var puv := PackedVector2Array()
+	var puv2 := PackedVector2Array()
+	var pi := PackedInt32Array()
+	var lit_up := not lf.is_empty()
 	# Per column: how far up it is solid from the bottom, and its top.
 	var floor_y := PackedInt32Array()
 	var top_y := PackedInt32Array()
@@ -1084,7 +1211,7 @@ func _mesh_volume(vol: PackedByteArray, ox: int, oz: int) -> Array:
 	for ci in pw * pw:
 		var base := ci * H
 		var y := 0
-		while y < H and vol[base + y] != AIR:
+		while y < H and _opaque[vol[base + y]] == 1:
 			y += 1
 		floor_y[ci] = y
 		var t := H - 1
@@ -1102,6 +1229,8 @@ func _mesh_volume(vol: PackedByteArray, ox: int, oz: int) -> Array:
 	var sx := H
 	var sz := H * pw
 	var lits := PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
+	var warm := PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
+	const ENC := 0.64
 	for lz in CH:
 		for lx in CH:
 			var ci := (lx + 1) + (lz + 1) * pw
@@ -1117,19 +1246,33 @@ func _mesh_volume(vol: PackedByteArray, ox: int, oz: int) -> Array:
 				if b == AIR:
 					continue
 				var glow := (_glow[b] & 1) == 1
-				var ore := (_glow[b] & 2) == 2
 				var jitter := 0.94 + _hash3(x, y, z) * 0.1
+				var mid := _model_of[b]
+				if mid >= 0:
+					if b == LANTERN and y + 1 < H and _opaque[vol[bi + 1]] == 1 and (y == 0 or vol[bi - 1] == AIR):
+						mid = _lantern_hang
+					_mesh_model(mid, vol, bi, x, y, z, ci, roof, in_room, jitter, lf, verts, cols, uvs, uv2s, inds)
+					continue
+				# Furnaces show their fire door on the first open side.
+				var front := -1
+				if b == FURNACE:
+					for f in [5, 0, 1, 4]:
+						if vol[bi + _face_n[f * 3 + 1] * sx + _face_n[f * 3 + 2] * sz] == AIR:
+							front = f
+							break
 				for f in 6:
 					var ny := y + _face_n[f * 3]
 					if ny < 0:
 						continue
 					var ni := bi + _face_n[f * 3] + _face_n[f * 3 + 1] * sx + _face_n[f * 3 + 2] * sz
-					if ny < H and vol[ni] != AIR:
+					if ny < H and _opaque[vol[ni]] == 1:
 						continue
 					var fd: Dictionary = faces[f]
 					var shade: float = fd["shade"]
 					var kind := 0 if f == 3 else (2 if f == 2 else 1)
-					var base: Color = _pal[b * 3 + kind]
+					var lay := _face_layer[b * 3 + kind]
+					if f == front:
+						lay = _front_lay
 					# How much daylight reaches the space this face looks into.
 					var day := 1.0
 					if ny < H and not in_room:
@@ -1137,58 +1280,157 @@ func _mesh_volume(vol: PackedByteArray, ox: int, oz: int) -> Array:
 						if ny <= top_y[nci]:
 							var gap := roof[nci * H + ny] - ny
 							if gap < H:
-								day = lerpf(0.5, 1.0, clampf((gap - 4) / 10.0, 0.0, 1.0))
+								day = lerpf(0.24, 1.0, clampf((gap - 3) / 11.0, 0.0, 1.0))
 					# Shade underground is a little cool and blue.
 					var cool := 1.0 - day
-					base = Color(base.r * (1.0 - cool * 0.12), base.g * (1.0 - cool * 0.04), base.b * (1.0 + cool * 0.22))
+					var tr := 1.0 - cool * 0.12
+					var tg := 1.0 - cool * 0.04
+					var tb := 1.0 + cool * 0.22
+					var fx := x + _face_n[f * 3 + 1]
+					var fz := z + _face_n[f * 3 + 2]
+					var lamp := 0
+					if lit_up and not glow:
+						lamp = _lf_at(lf, fx, ny, fz)
 					var corners: Array = fd["c"]
 					for k in 4:
 						var ai := (f * 4 + k) * 9
 						var s1 := _occ(vol, ni, ny, ai, sx, sz)
 						var s2 := _occ(vol, ni, ny, ai + 3, sx, sz)
+						var s3 := 1
 						var ao := 0
 						if s1 + s2 < 2:
-							ao = 3 - (s1 + s2 + _occ(vol, ni, ny, ai + 6, sx, sz))
+							s3 = _occ(vol, ni, ny, ai + 6, sx, sz)
+							ao = 3 - (s1 + s2 + s3)
 						if glow:
 							lits[k] = 1.15 * (0.75 + 0.25 * shade) * (0.55 + ao * 0.15)
 						else:
 							lits[k] = shade * jitter * (0.55 + ao * 0.15) * day
-					var c0: Vector3i = corners[0]
-					var p0 := Vector3(x + c0.x, y + c0.y, z + c0.z)
-					if not ore:
-						var start := verts.size()
-						for k in 4:
-							var cv: Vector3i = corners[k]
-							verts.append(Vector3(x + cv.x, y + cv.y, z + cv.z))
-							cols.append(Color(base.r * lits[k], base.g * lits[k], base.b * lits[k]))
-						inds.append_array(PackedInt32Array([start, start + 1, start + 2, start + 2, start + 1, start + 3]))
-						continue
-					# Ores: a 3 x 3 grid of stone with flecks of the ore.
-					var c1: Vector3i = corners[1]
-					var c2: Vector3i = corners[2]
-					var du := Vector3(c2 - c0)
-					var dv := Vector3(c1 - c0)
-					var stone: Color = _pal[STONE * 3 + kind]
-					stone = Color(stone.r * (1.0 - cool * 0.12), stone.g * (1.0 - cool * 0.04), stone.b * (1.0 + cool * 0.22))
-					for i in 4:
-						for j in 4:
-							var fh := _hash3(x * 7 + i * 13 + f * 3, y * 11 + j * 17 + f * 5, z * 5 + i * 29 + j * 31)
-							# Flecks keep off the block's rim, so ores read as ore, not checks.
-							var inner := i > 0 and i < 3 and j > 0 and j < 3
-							var fleck := fh > (0.3 if inner else 0.85)
-							var col: Color = base if fleck else stone
-							var gl := 1.0
-							var start := verts.size()
-							for k in 4:
-								var u := (i + (1 if k >= 2 else 0)) / 4.0
-								var v := (j + (k & 1)) / 4.0
-								verts.append(p0 + du * u + dv * v)
-								var l := lerpf(lerpf(lits[0], lits[2], u), lerpf(lits[1], lits[3], u), v) * gl
-								if glow and not fleck:
-									l = l / 1.15 * day
-								cols.append(Color(col.r * l, col.g * l, col.b * l))
-							inds.append_array(PackedInt32Array([start, start + 1, start + 2, start + 2, start + 1, start + 3]))
-	return [verts, cols, inds]
+						warm[k] = 0.0
+						if lamp > 0:
+							# Smooth lantern light: the open blocks around this corner.
+							var sum := float(_light_i[lamp])
+							var cnt := 1.0
+							if s1 == 0:
+								sum += _light_i[_lf_at(lf, fx + _face_ao[ai + 1], ny + _face_ao[ai], fz + _face_ao[ai + 2])]
+								cnt += 1.0
+							if s2 == 0:
+								sum += _light_i[_lf_at(lf, fx + _face_ao[ai + 4], ny + _face_ao[ai + 3], fz + _face_ao[ai + 5])]
+								cnt += 1.0
+							if s3 == 0:
+								sum += _light_i[_lf_at(lf, fx + _face_ao[ai + 7], ny + _face_ao[ai + 6], fz + _face_ao[ai + 8])]
+								cnt += 1.0
+							warm[k] = sum / cnt * (0.5 + 0.5 * shade) * (0.7 + ao * 0.1) * 1.05
+					var start := verts.size()
+					for k in 4:
+						var cv: Vector3i = corners[k]
+						var p := Vector3(x + cv.x, y + cv.y, z + cv.z)
+						verts.append(p)
+						var l := lits[k]
+						var w := warm[k]
+						cols.append(Color(minf(1.0, (l * tr + w) * ENC), minf(1.0, (l * tg + w * 0.74) * ENC), minf(1.0, (l * tb + w * 0.46) * ENC)))
+						uvs.append(Art.face_uv(Vector3(cv), f))
+						uv2s.append(Vector2(lay, 0.0))
+					inds.append_array(PackedInt32Array([start, start + 1, start + 2, start + 2, start + 1, start + 3]))
+					# Grass tufts and flowers on open tops.
+					if f == 3 and ny < H and vol[ni] == AIR and _plant_of[b] > 0 and y >= WATER:
+						_mesh_plant(b, x, y, z, (lits[0] + lits[1] + lits[2] + lits[3]) * 0.25, (warm[0] + warm[1] + warm[2] + warm[3]) * 0.25, tr, tg, tb, pv, pc, puv, puv2, pi)
+	return [verts, cols, inds, uvs, uv2s, pv, pc, pi, puv, puv2]
+
+
+## A block drawn as a small model (a lantern, a chest, a workbench...).
+func _mesh_model(mid: int, vol: PackedByteArray, bi: int, x: int, y: int, z: int, ci: int, roof: PackedInt32Array, in_room: bool, jitter: float, lf: Array, verts: PackedVector3Array, cols: PackedColorArray, uvs: PackedVector2Array, uv2s: PackedVector2Array, inds: PackedInt32Array) -> void:
+	const ENC := 0.64
+	var day := 1.0
+	if not in_room:
+		var gap := roof[bi] - y
+		if gap < H:
+			day = lerpf(0.24, 1.0, clampf((gap - 3) / 11.0, 0.0, 1.0))
+	var cool := 1.0 - day
+	var w := 0.0
+	if not lf.is_empty():
+		w = _light_i[_lf_at(lf, x, y, z)] * 1.05
+	var base := Vector3(x, y, z)
+	for box in _models[mid]:
+		var a: Vector3 = box[0]
+		var b: Vector3 = box[1]
+		var ls: PackedInt32Array = box[2]
+		var glow: bool = box[3]
+		for f in 6:
+			# Skip faces flat against a solid neighbour.
+			var on_edge := false
+			match f:
+				0:
+					on_edge = a.x <= 0.0
+				1:
+					on_edge = b.x >= 1.0
+				2:
+					on_edge = a.y <= 0.0
+				3:
+					on_edge = b.y >= 1.0
+				4:
+					on_edge = a.z <= 0.0
+				5:
+					on_edge = b.z >= 1.0
+			if on_edge:
+				var ny := y + _face_n[f * 3]
+				if ny < 0 or (ny < H and _opaque[vol[bi + _face_n[f * 3] + _face_n[f * 3 + 1] * H + _face_n[f * 3 + 2] * H * (CH + 2)]] == 1):
+					continue
+			var shade: float = faces[f]["shade"]
+			var kind := 0 if f == 3 else (2 if f == 2 else 1)
+			var col: Color
+			if glow:
+				var g := 1.15 * (0.8 + 0.2 * shade)
+				col = Color(minf(1.0, g * ENC), minf(1.0, g * ENC), minf(1.0, g * ENC))
+			else:
+				var l := shade * jitter * day
+				col = Color(minf(1.0, (l * (1.0 - cool * 0.12) + w) * ENC), minf(1.0, (l * (1.0 - cool * 0.04) + w * 0.74) * ENC), minf(1.0, (l * (1.0 + cool * 0.22) + w * 0.46) * ENC))
+			var cs := Art.box_face(a, b, f)
+			var start := verts.size()
+			for k in 4:
+				verts.append(base + cs[k])
+				cols.append(col)
+				uvs.append(Art.face_uv(cs[k], f))
+				uv2s.append(Vector2(ls[kind], 0.0))
+			inds.append_array(PackedInt32Array([start, start + 1, start + 2, start + 2, start + 1, start + 3]))
+
+
+## A tuft of grass, a fern, a flower or a dry bush standing on top of block b
+## (two crossed pictures that sway). Only drawn, never in the way.
+func _mesh_plant(b: int, x: int, y: int, z: int, l: float, w: float, tr: float, tg: float, tb: float, verts: PackedVector3Array, cols: PackedColorArray, uvs: PackedVector2Array, uv2s: PackedVector2Array, inds: PackedInt32Array) -> void:
+	var r := _hash3(x * 3 + 1, y * 5 + 2, z * 7 + 3)
+	var kind := _plant_of[b]
+	var lay := -1
+	match kind:
+		1:
+			if r < 0.025:
+				lay = _plant_lay[4 + floori(_hash3(x, y + 9, z) * 4.0)]
+			elif r < 0.07:
+				lay = _plant_lay[2]
+			elif r < 0.3:
+				lay = _plant_lay[0]
+		2:
+			if r < 0.16:
+				lay = _plant_lay[1]
+		3:
+			if r < 0.006:
+				lay = _plant_lay[3]
+	if lay < 0:
+		return
+	const ENC := 0.64
+	var hgt := 0.55 + _hash3(x + 5, y, z + 11) * 0.35
+	var jx := (_hash3(x + 1, y, z) - 0.5) * 0.3
+	var jz := (_hash3(x, y, z + 1) - 0.5) * 0.3
+	var c := Color(minf(1.0, (l * tr + w) * ENC), minf(1.0, (l * tg + w * 0.74) * ENC), minf(1.0, (l * tb + w * 0.46) * ENC))
+	var y1 := float(y + 1)
+	for d in 2:
+		var p0 := Vector3(x + 0.15 + jx, y1, z + (0.15 if d == 0 else 0.85) + jz)
+		var p1 := Vector3(x + 0.85 + jx, y1, z + (0.85 if d == 0 else 0.15) + jz)
+		var start := verts.size()
+		verts.append_array(PackedVector3Array([p0, p1, p0 + Vector3(0, hgt, 0), p1 + Vector3(0, hgt, 0)]))
+		cols.append_array(PackedColorArray([c, c, c, c]))
+		uvs.append_array(PackedVector2Array([Vector2(0, 1), Vector2(1, 1), Vector2(0, 0), Vector2(1, 0)]))
+		uv2s.append_array(PackedVector2Array([Vector2(lay, 0), Vector2(lay, 0), Vector2(lay, 1), Vector2(lay, 1)]))
+		inds.append_array(PackedInt32Array([start, start + 1, start + 2, start + 2, start + 1, start + 3]))
 
 
 func _occ(vol: PackedByteArray, ni: int, ny: int, ai: int, sx: int, sz: int) -> int:
@@ -1197,7 +1439,7 @@ func _occ(vol: PackedByteArray, ni: int, ny: int, ai: int, sx: int, sz: int) -> 
 		return 1
 	if ay >= H:
 		return 0
-	return 1 if vol[ni + _face_ao[ai] + _face_ao[ai + 1] * sx + _face_ao[ai + 2] * sz] != AIR else 0
+	return _opaque[vol[ni + _face_ao[ai] + _face_ao[ai + 1] * sx + _face_ao[ai + 2] * sz]]
 
 
 ## A padded volume around a chunk from the blocks already in memory.
@@ -1218,7 +1460,7 @@ func _volume_from_world(k: Vector2i) -> PackedByteArray:
 
 ## Builds a chunk's mesh right now from the blocks in memory.
 func _mesh_main(k: Vector2i) -> void:
-	_set_mesh(k, _mesh_volume(_volume_from_world(k), k.x * CH, k.y * CH))
+	_set_mesh(k, _mesh_volume(_volume_from_world(k), k.x * CH, k.y * CH, _light_fields_for(k)))
 
 
 func _set_mesh(k: Vector2i, arr: Array) -> void:
@@ -1228,15 +1470,20 @@ func _set_mesh(k: Vector2i, arr: Array) -> void:
 		add_child(mi)
 		_chunks[k] = mi
 	var mesh := ArrayMesh.new()
-	var verts: PackedVector3Array = arr[0]
-	if verts.size() > 0:
+	for part in 2:
+		var o := part * 5
+		var verts: PackedVector3Array = arr[o]
+		if verts.size() == 0:
+			continue
 		var arrays := []
 		arrays.resize(Mesh.ARRAY_MAX)
 		arrays[Mesh.ARRAY_VERTEX] = verts
-		arrays[Mesh.ARRAY_COLOR] = arr[1]
-		arrays[Mesh.ARRAY_INDEX] = arr[2]
+		arrays[Mesh.ARRAY_COLOR] = arr[o + 1]
+		arrays[Mesh.ARRAY_INDEX] = arr[o + 2]
+		arrays[Mesh.ARRAY_TEX_UV] = arr[o + 3]
+		arrays[Mesh.ARRAY_TEX_UV2] = arr[o + 4]
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-		mesh.surface_set_material(0, _material)
+		mesh.surface_set_material(mesh.get_surface_count() - 1, _material if part == 0 else art.plant_mat)
 	mi.mesh = mesh
 
 
@@ -1511,7 +1758,7 @@ func _gen_chunk(k: Vector2i, want_mesh: bool) -> Dictionary:
 			while t >= 0 and vol[i + t] == AIR:
 				t -= 1
 			top.append(t)
-	var res := {"key": k, "data": c, "top": top, "chests": chests_in}
+	var res := {"key": k, "data": c, "top": top, "chests": chests_in, "lights": _find_lights(c, k)}
 	if want_mesh:
 		res["mesh"] = _mesh_volume(vol, ox, oz)
 	return res
@@ -1776,6 +2023,16 @@ func _store(res: Dictionary) -> void:
 	_ctop[k] = res["top"]
 	for ch in res["chests"]:
 		chests[ch[0]] = ch[1]
+	# Lantern light near here was worked out without these blocks.
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			for l in _lights.get(k + Vector2i(dx, dz), []):
+				_lfields.erase(l)
+	var ls: Array = res.get("lights", [])
+	if ls.is_empty():
+		_lights.erase(k)
+	else:
+		_lights[k] = ls
 	if _edits.has(k):
 		_apply_edits(k)
 
@@ -1802,6 +2059,226 @@ func _apply_edits(k: Vector2i) -> void:
 		while t >= 0 and c[t + H * ci] == AIR:
 			t -= 1
 		top[ci] = t
+	_scan_lights(k)
+	# Light from these lanterns may reach chunks around this one.
+	for l in _lights.get(k, []):
+		_dirty_light_box(l, PackedByteArray(), PackedByteArray())
+
+
+# ---------------------------------------------------------------- lantern light
+
+## The light level (0..LIGHT_R) at a block from the lantern fields in lf.
+func _lf_at(lf: Array, x: int, y: int, z: int) -> int:
+	var best := 0
+	for e in lf:
+		var o: Vector3i = e[0]
+		var lx := x - o.x
+		var ly := y - o.y
+		var lz := z - o.z
+		if lx < 0 or ly < 0 or lz < 0 or lx >= LS or ly >= LS or lz >= LS:
+			continue
+		var f: PackedByteArray = e[1]
+		var v := f[ly + LS * (lx + LS * lz)]
+		if v > best:
+			best = v
+	return best
+
+
+## Light level at a point, for things that are not blocks (the hero).
+func light_level(p: Vector3) -> int:
+	var x := floori(p.x)
+	var y := floori(p.y)
+	var z := floori(p.z)
+	var lf := []
+	for l in lights_near(p, LIGHT_R + 1):
+		var lp: Vector3i = l
+		lf.append([lp - Vector3i(LIGHT_R, LIGHT_R, LIGHT_R), _light_field(lp)])
+	return _lf_at(lf, x, y, z)
+
+
+## Lanterns within r blocks (on every axis) of p, nearest first.
+func lights_near(p: Vector3, r: int) -> Array:
+	var out := []
+	var k0 := Vector2i((floori(p.x) - r) >> 4, (floori(p.z) - r) >> 4)
+	var k1 := Vector2i((floori(p.x) + r) >> 4, (floori(p.z) + r) >> 4)
+	for kz in range(k0.y, k1.y + 1):
+		for kx in range(k0.x, k1.x + 1):
+			for l in _lights.get(Vector2i(kx, kz), []):
+				var lp: Vector3i = l
+				if absf(lp.x + 0.5 - p.x) <= r and absf(lp.y + 0.5 - p.y) <= r and absf(lp.z + 0.5 - p.z) <= r:
+					out.append(lp)
+	out.sort_custom(func(a: Vector3i, b: Vector3i) -> bool:
+		return (Vector3(a) - p).length_squared() < (Vector3(b) - p).length_squared())
+	return out
+
+
+## The lantern fields that reach into chunk k.
+func _light_fields_for(k: Vector2i) -> Array:
+	var lf := []
+	if _lights.is_empty():
+		return lf
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			for l in _lights.get(k + Vector2i(dx, dz), []):
+				var lp: Vector3i = l
+				if lp.x + LIGHT_R + 1 < k.x * CH or lp.x - LIGHT_R - 1 > k.x * CH + CH or lp.z + LIGHT_R + 1 < k.y * CH or lp.z - LIGHT_R - 1 > k.y * CH + CH:
+					continue
+				lf.append([lp - Vector3i(LIGHT_R, LIGHT_R, LIGHT_R), _light_field(lp)])
+	return lf
+
+
+func _light_near_chunk(k: Vector2i) -> bool:
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			if _lights.has(k + Vector2i(dx, dz)):
+				return true
+	return false
+
+
+## Finds the lanterns in a chunk's blocks.
+func _find_lights(c: PackedByteArray, k: Vector2i) -> Array:
+	var out := []
+	var i := c.find(LANTERN)
+	while i != -1:
+		var ci: int = i / H
+		out.append(Vector3i(k.x * CH + (ci & 15), i % H, k.y * CH + (ci >> 4)))
+		i = c.find(LANTERN, i + 1)
+	return out
+
+
+func _scan_lights(k: Vector2i) -> void:
+	var old: Array = _lights.get(k, [])
+	for l in old:
+		_lfields.erase(l)
+	var found := _find_lights(_cdata[k], k)
+	if found.is_empty():
+		_lights.erase(k)
+	else:
+		_lights[k] = found
+
+
+## How far light from the lantern at p spreads: a flood fill that loses one
+## level per block and only passes through open blocks, so it bends round
+## corners into tunnels but never shines through rock.
+func _light_field(p: Vector3i) -> PackedByteArray:
+	var cached = _lfields.get(p)
+	if cached != null:
+		return cached
+	var o := p - Vector3i(LIGHT_R, LIGHT_R, LIGHT_R)
+	var open := PackedByteArray()
+	open.resize(LS * LS * LS)
+	for lz in LS:
+		for lx in LS:
+			var x := o.x + lx
+			var z := o.z + lz
+			var c = _cdata.get(Vector2i(x >> 4, z >> 4))
+			var base := H * ((x & 15) + ((z & 15) << 4))
+			var row := LS * (lx + LS * lz)
+			for ly in LS:
+				var y := o.y + ly
+				var v := 1
+				if y < 0:
+					v = 0
+				elif y < H and c != null:
+					v = _lpass[(c as PackedByteArray)[base + y]]
+				open[ly + row] = v
+	var f := PackedByteArray()
+	f.resize(LS * LS * LS)
+	f.fill(0)
+	var q := PackedInt32Array()
+	var ci := LIGHT_R + LS * (LIGHT_R + LS * LIGHT_R)
+	f[ci] = LIGHT_R
+	q.append(ci)
+	var steps := PackedInt32Array([1, -1, LS, -LS, LS * LS, -LS * LS])
+	var head := 0
+	while head < q.size():
+		var i := q[head]
+		head += 1
+		var lv := f[i] - 1
+		if lv <= 0:
+			continue
+		for st in steps:
+			var ni := i + st
+			if open[ni] == 1 and f[ni] == 0:
+				f[ni] = lv
+				q.append(ni)
+	f[ci] = LIGHT_R
+	_lfields[p] = f
+	return f
+
+
+## After a block changed at p: the lanterns whose light it may have changed
+## work their light out again, and chunks whose light changed are redrawn.
+func _relight(p: Vector3i, was_lantern: bool, is_lantern: bool) -> void:
+	var k := Vector2i(p.x >> 4, p.z >> 4)
+	if was_lantern or is_lantern:
+		var arr: Array = _lights.get(k, [])
+		if was_lantern:
+			arr.erase(p)
+			_lfields.erase(p)
+		if is_lantern and not arr.has(p):
+			arr.append(p)
+		if arr.is_empty():
+			_lights.erase(k)
+		else:
+			_lights[k] = arr
+		_dirty_light_box(p, PackedByteArray(), PackedByteArray())
+	for l in lights_near(Vector3(p) + Vector3(0.5, 0.5, 0.5), LIGHT_R):
+		var lp: Vector3i = l
+		if lp == p:
+			continue
+		var d := absi(lp.x - p.x) + absi(lp.y - p.y) + absi(lp.z - p.z)
+		if d > LIGHT_R + 1:
+			continue
+		var old: PackedByteArray = _lfields.get(lp, PackedByteArray())
+		_lfields.erase(lp)
+		var now := _light_field(lp)
+		if old != now:
+			_dirty_light_box(lp, old, now)
+
+
+## Queues every loaded chunk the light box around lantern lp reaches (only
+## where old and now differ, when both are given).
+func _dirty_light_box(lp: Vector3i, old: PackedByteArray, now: PackedByteArray) -> void:
+	var o := lp - Vector3i(LIGHT_R, LIGHT_R, LIGHT_R)
+	var x0 := o.x
+	var x1 := o.x + LS - 1
+	var z0 := o.z
+	var z1 := o.z + LS - 1
+	if old.size() == now.size() and old.size() > 0:
+		# Only the part that changed.
+		x0 = 1 << 30
+		x1 = -(1 << 30)
+		z0 = 1 << 30
+		z1 = -(1 << 30)
+		for lz in LS:
+			for lx in LS:
+				var row := LS * (lx + LS * lz)
+				for ly in LS:
+					if old[row + ly] != now[row + ly]:
+						x0 = mini(x0, o.x + lx)
+						x1 = maxi(x1, o.x + lx)
+						z0 = mini(z0, o.z + lz)
+						z1 = maxi(z1, o.z + lz)
+						break
+		# A face shows the light of the block in front of it, one further.
+		x0 -= 1
+		x1 += 1
+		z0 -= 1
+		z1 += 1
+	for kz in range(z0 >> 4, (z1 >> 4) + 1):
+		for kx in range(x0 >> 4, (x1 >> 4) + 1):
+			var kk := Vector2i(kx, kz)
+			if _chunks.has(kk) and not _dirty.has(kk) and not _main_queue.has(kk):
+				_main_queue.push_front(kk)
+
+
+## How many lanterns are known (for tests).
+func light_count() -> int:
+	var n := 0
+	for k in _lights:
+		n += (_lights[k] as Array).size()
+	return n
 
 
 # ---------------------------------------------------------------- saving
@@ -1829,6 +2306,11 @@ func load_edits(edits: Dictionary) -> void:
 				if _chunks.has(kk + n):
 					_dirty[kk + n] = true
 	_last_k = Vector2i(1 << 30, 0)
+	# Lantern light changes with the loaded blocks.
+	_lfields.clear()
+	for k in _lights:
+		for l in _lights[k]:
+			_dirty_light_box(l, PackedByteArray(), PackedByteArray())
 	flush_dirty()
 
 
@@ -1870,6 +2352,15 @@ func stream(at: Vector3, budget_ms := 4.0) -> void:
 		for n in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
 			if _modified.has(k + n) or is_island_chunk(k + n):
 				touches = true
+		if not (res["lights"] as Array).is_empty():
+			# Lanterns (in ruins): their light is worked out here, and
+			# reaches the chunks around.
+			touches = true
+			for dz in range(-1, 2):
+				for dx in range(-1, 2):
+					var nk := k + Vector2i(dx, dz)
+					if nk != k and _chunks.has(nk) and not _main_queue.has(nk):
+						_main_queue.append(nk)
 		if _modified.has(k):
 			# You changed it while it was on its way: mesh what is there now.
 			if not _main_queue.has(k):
@@ -1878,6 +2369,8 @@ func stream(at: Vector3, budget_ms := 4.0) -> void:
 		# (If something touched it early its blocks are the same as these.)
 		if not _cdata.has(k):
 			_store(res)
+		if _light_near_chunk(k):
+			touches = true
 		if touches:
 			_main_queue.append(k)
 		else:
@@ -1922,6 +2415,9 @@ func stream(at: Vector3, budget_ms := 4.0) -> void:
 				continue
 			_cdata.erase(kk)
 			_ctop.erase(kk)
+			for l in _lights.get(kk, []):
+				_lfields.erase(l)
+			_lights.erase(kk)
 			if _last_k == kk:
 				_last_k = Vector2i(1 << 30, 0)
 
