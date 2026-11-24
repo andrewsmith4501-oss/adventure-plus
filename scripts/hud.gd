@@ -49,7 +49,194 @@ class Ring extends Control:
 			draw_arc(c, 17.0, -PI / 2.0, -PI / 2.0 + TAU * value, 40, col, 6.0, true)
 
 
+## A small picture of an item: a little cube for blocks, pixel art for tools.
+class ItemIcon extends Control:
+	var id := ""
+	var color := Color.WHITE
+	var is_block := false
+
+	# 12x12 pixel art. b = the item's colour, e = a lighter edge,
+	# g = brass guard, h = wooden handle, d = darker shade.
+	const ART := {
+		"wsword": [
+			"..........ee",
+			".........ebe",
+			"........ebb.",
+			".......ebb..",
+			"......ebb...",
+			".....ebb....",
+			"..g.ebb.....",
+			"...gbb......",
+			"...hgg......",
+			"..hh..g.....",
+			".hh.........",
+			"hh..........",
+		],
+		"spick": [
+			"...eebbbb...",
+			"..eb....bbd.",
+			".eb.....hbbd",
+			".b.....h..bd",
+			"......h....d",
+			".....h......",
+			"....h.......",
+			"...h........",
+			"..h.........",
+			".h..........",
+			"h...........",
+			"............",
+		],
+		"stick": [
+			"..........hh",
+			".........hhd",
+			"........hhd.",
+			".......hhd..",
+			"......hhd...",
+			".....hhd....",
+			"....hhd.....",
+			"...hhd......",
+			"..hhd.......",
+			".hhd........",
+			"hhd.........",
+			"hd..........",
+		],
+		"glider": [
+			"............",
+			"gggggggggggg",
+			"ebbbbbbbbbbe",
+			".ebbbbbbbbe.",
+			"..ebbbbbbe..",
+			"...ebddbe...",
+			"....hddh....",
+			"....h..h....",
+			"....h..h....",
+			"....h..h....",
+			"............",
+			"............",
+		],
+		"shard": [
+			".....ee.....",
+			"....ebbd....",
+			"....ebbd....",
+			"...ebbbbd...",
+			"...ebbbbd...",
+			"..ebbbbbbd..",
+			"..ebbbbbbd..",
+			"...ebbbbd...",
+			"...ebbbbd...",
+			"....ebbd....",
+			"....ebbd....",
+			".....dd.....",
+		],
+	}
+
+	func _init(item_id: String, item: Dictionary) -> void:
+		id = item_id
+		color = item["color"]
+		is_block = item.has("block")
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		size = Vector2(36, 36)
+		custom_minimum_size = size
+
+	func _draw() -> void:
+		var art_id := id
+		if id == "ssword":
+			art_id = "wsword"
+		if ART.has(art_id):
+			_pixels(ART[art_id])
+		else:
+			_cube()
+
+	func _pixels(rows: Array) -> void:
+		var px := size.x / 12.0
+		var pal := {
+			"b": color,
+			"e": color.lightened(0.35),
+			"d": color.darkened(0.35),
+			"g": Color("d9a63a"),
+			"h": Color("7a5432"),
+		}
+		# A soft shadow first, then the pixels.
+		for pass_i in 2:
+			for y in rows.size():
+				var row: String = rows[y]
+				for x in row.length():
+					var ch := row[x]
+					if ch == ".":
+						continue
+					var c: Color = pal[ch]
+					var at := Vector2(x * px, y * px)
+					if pass_i == 0:
+						draw_rect(Rect2(at + Vector2(1.5, 1.5), Vector2(px, px)), Color(0, 0, 0, 0.35))
+					else:
+						draw_rect(Rect2(at, Vector2(px + 0.3, px + 0.3)), c)
+
+	func _cube() -> void:
+		var w := size.x
+		var c := Vector2(w / 2.0, w / 2.0)
+		var r := w * 0.42
+		var top := c + Vector2(0, -r)
+		var left := c + Vector2(-r * 0.87, -r * 0.5)
+		var right := c + Vector2(r * 0.87, -r * 0.5)
+		var mid := c
+		var bl := c + Vector2(-r * 0.87, r * 0.5)
+		var br := c + Vector2(r * 0.87, r * 0.5)
+		var bot := c + Vector2(0, r)
+		draw_colored_polygon(PackedVector2Array([top, right, mid, left]), color.lightened(0.12))
+		draw_colored_polygon(PackedVector2Array([left, mid, bot, bl]), color.darkened(0.12))
+		draw_colored_polygon(PackedVector2Array([mid, right, br, bot]), color.darkened(0.3))
+		var edge := Color(0, 0, 0, 0.35)
+		draw_polyline(PackedVector2Array([top, right, br, bot, bl, left, top]), edge, 1.0, true)
+		draw_line(mid, bot, edge, 1.0, true)
+		draw_line(left, mid, edge, 1.0, true)
+		draw_line(mid, right, edge, 1.0, true)
+
+
+## A compass strip: the way the camera faces is in the middle, with the
+## points of the compass and markers for the camp and the current quest.
+class Compass extends Control:
+	var heading := 0.0  # radians, clockwise from north
+	## [{"bearing": radians, "color": Color, "label": String}]
+	var markers: Array = []
+	const SPAN := PI * 0.75  # visible range across the whole strip
+
+	func _x_for(bearing: float) -> float:
+		var rel := fposmod(bearing - heading + PI, TAU) - PI
+		return size.x / 2.0 + rel / (SPAN / 2.0) * (size.x / 2.0)
+
+	func _draw() -> void:
+		var font := get_theme_default_font()
+		var bg := StyleBoxFlat.new()
+		bg.bg_color = Color(0.086, 0.11, 0.094, 0.7)
+		bg.set_corner_radius_all(8)
+		bg.border_color = Color(0.957, 0.937, 0.89, 0.18)
+		bg.set_border_width_all(1)
+		draw_style_box(bg, Rect2(Vector2.ZERO, size))
+		var names := {0: "N", 45: "NE", 90: "E", 135: "SE", 180: "S", 225: "SW", 270: "W", 315: "NW"}
+		for deg in range(0, 360, 15):
+			var x := _x_for(deg_to_rad(deg))
+			if x < 8.0 or x > size.x - 8.0:
+				continue
+			if names.has(deg):
+				var txt: String = names[deg]
+				var fs := 16 if txt.length() == 1 else 12
+				var col := Color("f2b84b") if deg == 0 else Color("f4efe3")
+				var tw := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+				draw_string(font, Vector2(x - tw / 2.0, size.y - 9.0), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
+			else:
+				draw_line(Vector2(x, size.y - 16.0), Vector2(x, size.y - 9.0), Color(1, 1, 1, 0.35), 1.0)
+		for m in markers:
+			var x := _x_for(m["bearing"])
+			var col: Color = m["color"]
+			var clamped := clampf(x, 10.0, size.x - 10.0)
+			var y := 4.0
+			draw_colored_polygon(PackedVector2Array([Vector2(clamped - 5, y), Vector2(clamped + 5, y), Vector2(clamped, y + 7)]), col)
+		# The middle line: where you're facing.
+		draw_line(Vector2(size.x / 2.0, 2.0), Vector2(size.x / 2.0, size.y - 2.0), Color(1, 1, 1, 0.8), 2.0)
+
+
 var root: Control
+var compass: Compass
 var hearts: Hearts
 var ring: Ring
 var state_label: Label
@@ -110,6 +297,11 @@ func _ready() -> void:
 	hearts.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_place(hearts, 0, 0, 0, 0, 16, 14, 260, 46)
 	root.add_child(hearts)
+
+	compass = Compass.new()
+	compass.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_place(compass, 0.5, 0, 0.5, 0, -190, 12, 190, 46)
+	root.add_child(compass)
 
 	state_label = Label.new()
 	state_label.add_theme_color_override("font_color", ACCENT)
@@ -402,11 +594,8 @@ func _slot_panel(s, items: Dictionary, border: Color, number := "") -> Panel:
 
 
 func _add_stack(p: Control, s, items: Dictionary) -> void:
-	var icon := ColorRect.new()
-	icon.color = items[s["id"]]["color"]
-	icon.position = Vector2(12, 12)
-	icon.size = Vector2(28, 28)
-	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var icon := ItemIcon.new(s["id"], items[s["id"]])
+	icon.position = Vector2(8, 8)
 	p.add_child(icon)
 	var n: int = s["n"]
 	if n > 1:
@@ -535,6 +724,13 @@ func set_quest(title: String, steps: Array, side: Array, footer := "") -> void:
 			goals_box.add_child(_label(("✓ " if d else "○ ") + str(g["text"]), 13, INK_DIM if d else INK, true))
 
 
+## heading: radians clockwise from north. markers: see Compass.
+func set_compass(heading: float, markers: Array) -> void:
+	compass.heading = heading
+	compass.markers = markers
+	compass.queue_redraw()
+
+
 func set_prompt(text: String) -> void:
 	prompt_label.text = text
 
@@ -578,9 +774,7 @@ func render_recipes(rows: Array) -> void:
 		var row: Dictionary = rows[i]
 		var hb := HBoxContainer.new()
 		hb.add_theme_constant_override("separation", 12)
-		var sw := ColorRect.new()
-		sw.color = row["color"]
-		sw.custom_minimum_size = Vector2(26, 26)
+		var sw := ItemIcon.new(row["id"], row["item"])
 		sw.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		hb.add_child(sw)
 		var info := VBoxContainer.new()
