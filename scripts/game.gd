@@ -526,6 +526,8 @@ func _recipe_rows() -> Array:
 			"need": "Already crafted" if owned else " + ".join(parts).replace("nearby[/color] + ", "nearby[/color]   "),
 			"ok": ok,
 			"color": items[out]["color"],
+			"id": out,
+			"item": items[out],
 		})
 	return rows
 
@@ -1074,6 +1076,7 @@ func _process(delta: float) -> void:
 	if player.wind.length() > 1.0:
 		state = "Gust!"
 	hud.set_state(state)
+	hud.set_compass(-player.cam_yaw, _compass_markers())
 	_beacon_mat.albedo_color.a = 0.2 + sin(_time * 2.0) * 0.08
 
 	# Wind rushing past while gliding.
@@ -1081,6 +1084,39 @@ func _process(delta: float) -> void:
 	if running and player.mode == "glide":
 		glide_level = clampf(player.vel.length() / 14.0, 0.2, 0.7)
 	audio.set_loop("glide_wind", glide_level)
+
+
+## Where the tracked quest wants you to go next, or null.
+func _quest_target():
+	var title: String = quests[tracked]["title"]
+	if title == "The Stilled Wind":
+		if not done.has("talk") or done.has("node"):
+			return bryn.pos
+		return Vector3(World.HOLLOW_X0 - 6, World.HOLLOW_FY, World.MESA_CZ)
+	if title == "A Bridge for Wren":
+		if done.has("bridge") and done.has("wren_talk") or not done.has("wren_talk"):
+			return wren.pos
+		var a: Vector2i = world.ford["a"]
+		return Vector3(a.x + 3, 0, a.y)
+	if title == "The Hearthroot Shrine" and not done.has("shrine_chest"):
+		if not done.has("shrine_find"):
+			return Vector3(World.SHRINE_X0 - 5, World.SHRINE_FY, (World.SHRINE_Z0 + World.SHRINE_Z1) / 2.0)
+		return null
+	return null
+
+
+func _bearing(to: Vector3) -> float:
+	return atan2(to.x - player.pos.x, -(to.z - player.pos.z))
+
+
+func _compass_markers() -> Array:
+	var out := [{"bearing": _bearing(Vector3(World.CAMP_X, 0, World.CAMP_Z)), "color": Color("f4efe3"), "label": "Camp"}]
+	var t = _quest_target()
+	if t != null:
+		var tv: Vector3 = t
+		if Vector2(tv.x - player.pos.x, tv.z - player.pos.z).length() > 4.0:
+			out.append({"bearing": _bearing(tv), "color": Color("f2b84b"), "label": "Quest"})
+	return out
 
 
 func _update_region(dt: float) -> void:

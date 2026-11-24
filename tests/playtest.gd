@@ -360,7 +360,13 @@ func _init() -> void:
 			shot("28_inventory")
 			game._resume()
 			check(game.cursor == null and game.count("bricks") == 5, "closing returns the held stack")
-			check(not game.hud.screens["inv"].visible, "inventory closed")],
+			check(not game.hud.screens["inv"].visible, "inventory closed")
+			# Compass: facing east (yaw -PI/2) reads a heading of 90 degrees.
+			game.player.cam_yaw = -PI / 2],
+		[5, func():
+			check(absf(rad_to_deg(game.hud.compass.heading) - 90.0) < 1.0, "compass reads east (%.1f)" % rad_to_deg(game.hud.compass.heading))
+			check(game.hud.compass.markers.size() >= 1, "compass has a camp marker")
+			shot("29_compass_tools")],
 		[1, func():
 			print("RESULT fails=%d" % fails)
 			quit(1 if fails > 0 else 0)],
