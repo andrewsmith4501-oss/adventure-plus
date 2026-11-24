@@ -122,6 +122,7 @@ func update(dt: float, world: World, player, game) -> void:
 				vel = Vector3(d.x * 4.2, 6.5, d.z * 4.2)
 				hop_t = 0.55 + _rng.randf() * 0.35
 				face_yaw = atan2(d.x, d.z)
+				game.audio.play_at("enemy_hop", pos, -4.0)
 			else:
 				var a := _rng.randf() * TAU
 				vel = Vector3(sin(a) * 2.0, 4.5, cos(a) * 2.0)
