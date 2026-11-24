@@ -10,6 +10,56 @@ The design lives in the project's design doc. This repository holds the game its
 2. Open Godot, choose **Import**, and pick `project.godot` in this folder.
 3. Press **F5** (or the play button) to run.
 
+## Play it on an Android phone
+
+The game runs on Android phones as an app. You need an APK (the Android app file), then you install it once. Later versions install over the top and keep your saved world.
+
+**Get the APK.** Each version is attached to the pull request or sent in the project thread as `AdventurePlus.apk`. To build one yourself, see *Build the APK* below.
+
+**Install it (one time setup, about 2 minutes):**
+
+1. Download `AdventurePlus.apk` on the phone (for example by opening the link in Chrome, or from Google Drive).
+2. Open it from the download notification, or from **Files > Downloads**.
+3. Android asks whether Chrome (or Files, or Drive) may install unknown apps. Tap **Settings**, turn on **Allow from this source**, then go back.
+4. Tap **Install**. If Google Play Protect warns that it doesn't recognise the app, tap **More details > Install anyway**. (It's warning because the app is your own and isn't on the Play Store.)
+5. Open **Adventure Plus** from your apps. Hold the phone sideways.
+
+**Updating:** download and install the new APK the same way. It replaces the old one and your world is kept. To start fresh, use **New world** on the pause screen.
+
+**The Godot app on your phone** is the Godot *editor* for Android. It can open this project folder too, but it is slow for a game this size and has no on-screen joystick of its own, so the APK is the better way to play.
+
+### Touch controls
+
+| On screen | Action |
+| --- | --- |
+| Left thumb, bottom left | Move (the stick appears where you touch). Walk into a tall wall to climb it |
+| Drag on the right side | Look around |
+| Jump | Jump. On a wall: leap up. Hold in water to swim up |
+| Glide | In the air: open the glider. Tap again to close it |
+| Climb | Grab the wall you're facing, or let go |
+| Sprint | Hold to sprint |
+| Hit | Hold to break a block, tap to attack |
+| Place | Place the selected block where the crosshair aims |
+| Use | Shows up when you can talk, read, open or push. Taps also move dialogue on |
+| Hotbar slots | Tap to choose |
+| Bag, Craft, Quest, View, II | Inventory, crafting, switch quest, first or third person, pause |
+
+In the inventory, the **Tap** button switches what a tap does: move a stack, take half (or put down one), or quick-move between pack and hotbar.
+
+On a computer with a touchscreen the same controls appear when you touch the screen, and hide again when you press a key.
+
+### Graphics setting
+
+The pause screen has a **Graphics** button. **High** loads 10 chunks (160 blocks) around you with anti-aliasing, grass and flowers, and every lantern light. **Phone** loads 5 chunks, turns off anti-aliasing and plant tufts, draws the 3D view at 80% resolution, uses one nearby lantern light and only nearby shadows. Phones start on Phone, computers on High, and the choice is remembered.
+
+### Build the APK
+
+1. In Godot, open **Editor > Manage Export Templates** and download the templates for your Godot version.
+2. Install a Java JDK 17 or newer and the Android SDK (Android Studio installs it), then set both paths in **Editor > Editor Settings > Export > Android**. Godot makes a debug signing key on its own.
+3. **Project > Export**, pick the **Android** preset (already in `export_presets.cfg`) and **Export Project** with *Export With Debug* on. It writes `export/AdventurePlus.apk` (64-bit ARM, the kind every recent phone uses).
+
+From the command line: `godot --headless --export-debug Android export/AdventurePlus.apk`.
+
 ## Controls
 
 | Key | Action |
@@ -73,11 +123,14 @@ The design lives in the project's design doc. This repository holds the game its
 | `scripts/art.gd` | How things look: paints the block textures, the block models (lanterns, chests...), item models and the terrain, item, water and sky shaders |
 | `scripts/audio.gd` | Sound effects, ambience and music with cross-fades |
 | `scripts/hud.gd` | Hearts, stamina, hotbar, quest panel, dialogue, banners, toasts and menus |
+| `scripts/touch.gd` | On-screen controls for phones: move stick, look drag and buttons, with every finger tracked |
+| `export_presets.cfg` | The Android export (signed debug APK, 64-bit ARM, landscape) |
 | `assets/audio/` | Generated sounds and music (CC0) |
 | `tools/make_audio.py` | Regenerates every sound |
 | `tests/playtest.gd` | Scripted playthrough of every quest with checks and screenshots |
 | `tests/underground.gd` | Checks saving and loading (island and wild edits, inventory, quests, puzzles), caves, ores, smelting and New world |
 | `tests/visuals.gd` | Checks item models and icons, lantern light in a cave (and after saving and loading, and with many lanterns), and takes screenshots of the scenery and characters |
+| `tests/touch.gd` | Sends pretend finger touches: stick, look, every button, hotbar taps, inventory tap modes, phone graphics, and screenshots at a phone's shape |
 | `tests/wild.gd` | Checks the wild lands: every biome appears, chunks stream in fast enough to glide, edits survive leaving, ruins have chests |
 | `prototype/web/index.html` | The original browser prototype, kept for reference |
 

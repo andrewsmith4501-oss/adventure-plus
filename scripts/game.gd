@@ -10,6 +10,7 @@ const Thornling = preload("res://scripts/thornling.gd")
 const Hud = preload("res://scripts/hud.gd")
 const Audio = preload("res://scripts/audio.gd")
 const Npc = preload("res://scripts/npc.gd")
+const TouchControls = preload("res://scripts/touch.gd")
 const Art = preload("res://scripts/art.gd")
 
 var items := {
@@ -183,6 +184,10 @@ const WILD_AUDIO := {
 var world: World
 var player: Player
 var hud: Hud
+## On-screen controls for phones (hidden on a computer until you touch the screen).
+var touch: TouchControls
+## "high" or "phone": how far the world loads and how many effects are drawn.
+var graphics := "high"
 var audio: Audio
 var bryn: Npc
 var wren: Npc
@@ -235,6 +240,8 @@ var _sky_mat: ShaderMaterial
 var _lamp_lights: Array = []
 var _hand_light: OmniLight3D
 var _lamp_t := 0.0
+## Phone graphics: fewer lantern lights and soft shadows.
+var _low_fx := false
 var _hand_glow := 0.0
 var _dark := 0.0
 ## Items popping out of broken blocks and flying to the hero.
@@ -325,6 +332,19 @@ func _ready() -> void:
 	hud.craft_requested.connect(_craft)
 	hud.music_volume_changed.connect(audio.set_music_volume)
 	hud.sound_volume_changed.connect(audio.set_sound_volume)
+	hud.graphics_toggled.connect(func() -> void: set_graphics("high" if graphics == "phone" else "phone"))
+
+	touch = TouchControls.new()
+	touch.game = self
+	add_child(touch)
+	if OS.has_feature("mobile"):
+		# Phones have small, very sharp screens: draw the menus and buttons
+		# at a fixed size in UI units so they are big enough to touch.
+		var win := get_tree().root
+		win.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
+		win.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
+		win.content_scale_size = Vector2i(1280, 720)
+	_load_settings()
 
 	_make_beacon()
 	_make_markers()
@@ -522,7 +542,7 @@ func _update_lights(dt: float) -> void:
 		var near := world.lights_near(player.pos, 16)
 		for i in _lamp_lights.size():
 			var l: OmniLight3D = _lamp_lights[i]
-			l.visible = i < near.size()
+			l.visible = i < near.size() and (i < 1 or not _low_fx)
 			if l.visible:
 				l.position = Vector3(near[i]) + Vector3(0.5, 0.45, 0.5)
 	# A lantern in the hand lights the blocks around you as well.
@@ -582,6 +602,8 @@ func _update_shadows() -> void:
 		var p: Vector3 = who.get("pos")
 		var alive = who.get("alive")
 		mi.visible = who.visible and (alive == null or alive) and not (who == player and player.first_person)
+		if _low_fx and who != player and who.get("pos").distance_squared_to(player.pos) > 24.0 * 24.0:
+			mi.visible = false
 		if not mi.visible:
 			continue
 		var x := floori(p.x)
@@ -1222,6 +1244,10 @@ func _return_cursor() -> void:
 # ---------------------------------------------------------------- input
 
 func _unhandled_input(event: InputEvent) -> void:
+	# Taps on a phone also arrive as pretend mouse clicks; the menus use
+	# those, but in the world the on-screen controls handle every finger.
+	if (event is InputEventMouseButton or event is InputEventMouseMotion) and event.device == InputEvent.DEVICE_ID_EMULATION:
+		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var mm := event as InputEventMouseMotion
 		player.cam_yaw -= mm.relative.x * 0.0024
@@ -1280,10 +1306,86 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif code == KEY_Q:
 			cycle_quest()
 		elif code == KEY_V:
-			player.first_person = not player.first_person
-			toast("First person" if player.first_person else "Third person")
+			toggle_view()
 		elif code >= KEY_1 and code <= KEY_9:
 			select_slot(code - KEY_1)
+
+
+func toggle_view() -> void:
+	player.first_person = not player.first_person
+	toast("First person" if player.first_person else "Third person")
+
+
+# Used by the on-screen controls (touch.gd).
+func place_block() -> void:
+	_place_block()
+
+
+func interact() -> void:
+	_interact()
+
+
+func advance_dialog() -> void:
+	_advance_dialog()
+
+
+func pause() -> void:
+	if running and not talking():
+		_pause()
+
+
+func toggle_inventory() -> void:
+	if hud.screens["craft"].visible:
+		_resume()
+	_toggle_inventory()
+
+
+func toggle_craft() -> void:
+	if hud.screens["inv"].visible:
+		_resume()
+	_toggle_craft()
+
+
+# ---------------------------------------------------------------- graphics
+
+## "high" draws everything; "phone" loads less of the world and turns off
+## the costlier effects so the game runs smoothly on a phone.
+func set_graphics(level: String) -> void:
+	graphics = level
+	var phone := level == "phone"
+	world.set_detail(5 if phone else World.VIEW, not phone)
+	var reach := float(world.view * World.CH)
+	_env.fog_depth_begin = 30.0 if phone else 70.0
+	_env.fog_depth_end = reach - 8.0
+	camera.far = reach + 40.0
+	var vp := get_viewport()
+	vp.msaa_3d = Viewport.MSAA_DISABLED if phone else Viewport.MSAA_2X
+	vp.scaling_3d_scale = 0.8 if phone else 1.0
+	_low_fx = phone
+	hud.set_graphics_label(phone)
+	_save_settings()
+
+
+func _load_settings() -> void:
+	var cf := ConfigFile.new()
+	var level := "phone" if OS.has_feature("mobile") else "high"
+	if save_path != "" and cf.load(_settings_path()) == OK:
+		level = cf.get_value("video", "graphics", level)
+	set_graphics(level)
+
+
+func _save_settings() -> void:
+	if save_path == "":
+		return
+	var cf := ConfigFile.new()
+	cf.load(_settings_path())
+	cf.set_value("video", "graphics", graphics)
+	cf.save(_settings_path())
+
+
+## Settings live next to the save: user://world.settings.cfg.
+func _settings_path() -> String:
+	return save_path.get_basename() + ".settings.cfg"
 
 
 ## What F would do right now: {"text": prompt, "do": Callable} or {}.
@@ -2014,6 +2116,21 @@ func _update_interaction(dt: float) -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		save_game()
+	elif what == NOTIFICATION_APPLICATION_PAUSED:
+		# A phone switched to another app (it may close this one later).
+		if running and not talking():
+			_pause()
+		else:
+			save_game()
+	elif what == NOTIFICATION_WM_GO_BACK_REQUEST:
+		# Android's back gesture: close a menu or dialogue, or pause.
+		if running and talking():
+			_dialog = []
+			hud.hide_dialog()
+		elif running:
+			_pause()
+		elif hud.screens["craft"].visible or hud.screens["inv"].visible:
+			_resume()
 
 
 ## Everything needed to pick up where you left off: the world's changed

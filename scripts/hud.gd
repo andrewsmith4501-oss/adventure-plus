@@ -2,6 +2,9 @@ extends CanvasLayer
 ## Everything drawn on top of the 3D view: hearts, stamina ring, hotbar,
 ## goals, toasts and the start, crafting and knocked-out screens.
 
+const INV_HELP := "Click to pick up a stack and click again to put it down. Right-click takes half, or puts down one. Shift-click moves a stack between your pack and the hotbar. Drop a stack on the bin to throw it away."
+const INV_HELP_TOUCH := "Tap a stack to pick it up and tap again to put it down. The Tap button switches to taking half (or putting down one), or to quick-moving stacks between your pack and the hotbar. Drop a stack on the bin to throw it away."
+
 signal play_pressed
 signal new_world_pressed
 signal craft_closed
@@ -11,6 +14,7 @@ signal respawn_pressed
 signal craft_requested(index: int)
 signal music_volume_changed(value: float)
 signal sound_volume_changed(value: float)
+signal graphics_toggled
 
 const Art = preload("res://scripts/art.gd")
 const ACCENT := Color("f2b84b")
@@ -178,6 +182,16 @@ var start_title: Label
 var play_button: Button
 var new_world_button: Button
 var save_label: Label
+var graphics_button: Button
+var keys_grid: GridContainer
+var touch_grid: GridContainer
+var dialog_hint: Label
+var inv_help: Label
+var tap_button: Button
+## Phone inventory: what a tap does (0 move a stack, 1 take half or put one,
+## 2 quick move between pack and hotbar).
+var tap_mode := 0
+var touch_mode := false
 var _has_save := false
 var screens := {}
 var audio  # audio.gd, for button clicks
@@ -291,6 +305,7 @@ func _ready() -> void:
 	var cont := _label("F or click to continue", 12, INK_DIM)
 	cont.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	dbox.add_child(cont)
+	dialog_hint = cont
 	dialog_panel.visible = false
 	root.add_child(dialog_panel)
 
@@ -418,6 +433,29 @@ func _build_start_screen() -> void:
 		desc.custom_minimum_size = Vector2(360, 0)
 		grid.add_child(desc)
 	box.add_child(grid)
+	keys_grid = grid
+	# The same, for the on-screen controls on a phone.
+	touch_grid = GridContainer.new()
+	touch_grid.columns = 2
+	touch_grid.add_theme_constant_override("h_separation", 14)
+	var taps := [
+		["Left thumb", "Move. Walk into a tall wall to climb it"],
+		["Drag right side", "Look around"],
+		["Jump", "Jump. On a wall: leap up. Hold in water to swim up"],
+		["Glide / Climb", "Open the glider in the air. Grab a wall, or let go"],
+		["Hit", "Hold to break a block, tap to attack"],
+		["Place", "Place the selected block where you aim"],
+		["Use", "Talk, read, open, push (shows up when you can)"],
+		["Hotbar", "Tap a slot to choose it"],
+		["Bag, Craft, Quest, View, II", "Inventory, crafting, switch quest, camera, pause"],
+	]
+	for k in taps:
+		touch_grid.add_child(_label(k[0], 15, ACCENT))
+		var desc := _label(k[1], 15, INK, true)
+		desc.custom_minimum_size = Vector2(380, 0)
+		touch_grid.add_child(desc)
+	touch_grid.visible = false
+	box.add_child(touch_grid)
 	var vol := GridContainer.new()
 	vol.columns = 2
 	vol.add_theme_constant_override("h_separation", 14)
@@ -429,6 +467,15 @@ func _build_start_screen() -> void:
 	vol.add_child(music_slider)
 	vol.add_child(_label("Sound", 15, ACCENT))
 	vol.add_child(sound_slider)
+	vol.add_child(_label("Graphics", 15, ACCENT))
+	graphics_button = _button("High")
+	graphics_button.pressed.connect(func() -> void: graphics_toggled.emit())
+	for st in ["normal", "hover", "pressed"]:
+		var bg := Color("3a423c") if st == "normal" else (Color("4a544d") if st == "hover" else Color("2f3631"))
+		graphics_button.add_theme_stylebox_override(st, _style(bg, 8, 8, 14))
+	for st in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		graphics_button.add_theme_color_override(st, INK)
+	vol.add_child(graphics_button)
 	box.add_child(vol)
 	save_label = _label("", 14, INK_DIM, true)
 	save_label.visible = false
@@ -449,6 +496,26 @@ func _build_start_screen() -> void:
 	for st in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
 		new_world_button.add_theme_color_override(st, INK)
 	row.add_child(new_world_button)
+
+
+func set_graphics_label(phone: bool) -> void:
+	graphics_button.text = "Phone (faster: shorter view, fewer effects)" if phone else "High (full view distance and effects)"
+
+
+## Shows the phone controls' help instead of the keyboard's, and lets taps
+## in the inventory do what right-click and shift-click do.
+func set_touch_mode(on: bool) -> void:
+	touch_mode = on
+	keys_grid.visible = not on
+	touch_grid.visible = on
+	dialog_hint.text = "Tap to continue" if on else "F or click to continue"
+	tap_button.visible = on
+	inv_help.text = INV_HELP_TOUCH if on else INV_HELP
+
+
+func _cycle_tap_mode() -> void:
+	tap_mode = (tap_mode + 1) % 3
+	tap_button.text = ["Tap: move a stack", "Tap: take half / put one", "Tap: quick move"][tap_mode]
 
 
 func _slider(value: float) -> HSlider:
@@ -478,7 +545,9 @@ func _build_craft_screen() -> void:
 
 
 func _build_inventory_screen() -> void:
-	var box := _make_screen("inv", "Inventory", "Click to pick up a stack and click again to put it down. Right-click takes half, or puts down one. Shift-click moves a stack between your pack and the hotbar. Drop a stack on the bin to throw it away.")
+	var box := _make_screen("inv", "Inventory", "")
+	inv_help = _label(INV_HELP, 16, INK_DIM, true)
+	box.add_child(inv_help)
 	box.add_child(_label("PACK", 12, ACCENT))
 	pack_grid = GridContainer.new()
 	pack_grid.columns = 9
@@ -504,6 +573,11 @@ func _build_inventory_screen() -> void:
 	close.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	close.pressed.connect(func() -> void: inv_closed.emit())
 	row.add_child(close)
+	tap_button = _button("Tap: move a stack")
+	tap_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	tap_button.pressed.connect(_cycle_tap_mode)
+	tap_button.visible = false
+	row.add_child(tap_button)
 	box.add_child(row)
 	cursor_icon = Control.new()
 	cursor_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -515,7 +589,10 @@ func _build_inventory_screen() -> void:
 func _slot_input(ev: InputEvent, index: int) -> void:
 	if ev is InputEventMouseButton and ev.pressed:
 		var mb := ev as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_LEFT or mb.button_index == MOUSE_BUTTON_RIGHT:
+		if mb.button_index == MOUSE_BUTTON_LEFT and touch_mode and mb.device == InputEvent.DEVICE_ID_EMULATION:
+			inv_clicked.emit(index, MOUSE_BUTTON_RIGHT if tap_mode == 1 else MOUSE_BUTTON_LEFT, tap_mode == 2)
+			get_viewport().set_input_as_handled()
+		elif mb.button_index == MOUSE_BUTTON_LEFT or mb.button_index == MOUSE_BUTTON_RIGHT:
 			inv_clicked.emit(index, mb.button_index, mb.shift_pressed)
 			get_viewport().set_input_as_handled()
 
@@ -695,7 +772,8 @@ func set_compass(heading: float, markers: Array) -> void:
 
 
 func set_prompt(text: String) -> void:
-	prompt_label.text = text
+	# On a phone the Use button does what F does.
+	prompt_label.text = text.trim_prefix("F  ") if touch_mode else text
 
 
 func show_dialog(speaker: String, text: String) -> void:

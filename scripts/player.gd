@@ -275,6 +275,40 @@ func _smooth_hint() -> void:
 		game.toast("Loomstone is too smooth to climb")
 
 
+## The phone's Climb button: grab the wall in front of you, or let go.
+func toggle_climb() -> void:
+	if mode == "climb" or mode == "mantle":
+		mode = "walk"
+		vel = Vector3(-wall.x * 1.5, 0, -wall.z * 1.5)
+		return
+	if mode != "walk" or in_water:
+		return
+	var fd := Vector3(-sin(yaw), 0, -cos(yaw))
+	var w := _snap_wall(fd)
+	if not (_wall_probe(w, 1.2) and _wall_probe(w, 0.4)):
+		game.toast("Face a wall to climb it")
+	elif _smooth(w, 1.2):
+		_smooth_hint()
+	elif exhausted:
+		game.toast("Too tired to climb")
+	else:
+		mode = "climb"
+		wall = w
+		vel = Vector3.ZERO
+
+
+## The phone's Glide button: open the glider in the air, or close it.
+func toggle_glide() -> void:
+	if mode == "glide":
+		stop_glide()
+	elif mode == "walk" and not grounded and not in_water:
+		glide_start_y = pos.y
+		glide_dist = 0.0
+		start_glide()
+	else:
+		game.toast("Jump or step off a ledge first, then open the glider")
+
+
 func use_stamina(amount: float) -> void:
 	stamina = maxf(0.0, stamina - amount)
 	stam_delay = 0.7
@@ -306,9 +340,15 @@ func stop_glide() -> void:
 func update(dt: float, jump: bool) -> void:
 	var f := forward_flat()
 	var r := right_flat()
-	var in_f := (1 if _key(KEY_W) else 0) - (1 if _key(KEY_S) else 0)
-	var in_r := (1 if _key(KEY_D) else 0) - (1 if _key(KEY_A) else 0)
+	var in_f := float((1 if _key(KEY_W) else 0) - (1 if _key(KEY_S) else 0))
+	var in_r := float((1 if _key(KEY_D) else 0) - (1 if _key(KEY_A) else 0))
 	var shift := _key(KEY_SHIFT)
+	# The on-screen stick and Sprint button on a phone.
+	var touch = game.touch if game != null else null
+	if touch != null and touch.enabled:
+		in_f = clampf(in_f + touch.move.y, -1.0, 1.0)
+		in_r = clampf(in_r + touch.move.x, -1.0, 1.0)
+		shift = shift or touch.sprint
 	in_water = pos.y + 0.7 < World.WATER_SURF
 	if in_water and not _was_in_water and vel.y < -2.0:
 		game.audio.play("splash", -4.0)
@@ -349,7 +389,7 @@ func update(dt: float, jump: bool) -> void:
 	update_camera(-in_r * 0.08 if mode == "glide" else 0.0)
 
 
-func _update_climb(dt: float, r: Vector3, in_f: int, in_r: int, shift: bool, jump: bool) -> void:
+func _update_climb(dt: float, r: Vector3, in_f: float, in_r: float, shift: bool, jump: bool) -> void:
 	yaw = _yaw_of(wall)
 	var t := Vector3(-wall.z, 0, wall.x)
 	if t.dot(r) < 0.0:
@@ -391,7 +431,7 @@ func _update_climb(dt: float, r: Vector3, in_f: int, in_r: int, shift: bool, jum
 		mode = "walk"
 
 
-func _update_glide(dt: float, f: Vector3, r: Vector3, in_f: int, in_r: int, shift: bool, jump: bool) -> void:
+func _update_glide(dt: float, f: Vector3, r: Vector3, in_f: float, in_r: float, shift: bool, jump: bool) -> void:
 	var lift := world.updraft_at(pos)
 	if lift > 0.0:
 		vel.y += (lift - vel.y) * minf(1.0, 3.0 * dt)
@@ -421,7 +461,7 @@ func _update_glide(dt: float, f: Vector3, r: Vector3, in_f: int, in_r: int, shif
 		wall = w
 
 
-func _update_walk(dt: float, f: Vector3, r: Vector3, in_f: int, in_r: int, shift: bool, jump: bool) -> void:
+func _update_walk(dt: float, f: Vector3, r: Vector3, in_f: float, in_r: float, shift: bool, jump: bool) -> void:
 	var sprint := shift and grounded and in_f > 0 and not exhausted
 	var speed := (8.2 if sprint else 5.2) * (0.55 if in_water else 1.0)
 	if sprint:
@@ -440,7 +480,7 @@ func _update_walk(dt: float, f: Vector3, r: Vector3, in_f: int, in_r: int, shift
 	if in_water:
 		vel.y -= 7.0 * dt
 		vel.y *= pow(0.15, dt)
-		if _key(KEY_SPACE):
+		if _key(KEY_SPACE) or (game.touch != null and game.touch.jump_held):
 			vel.y = minf(vel.y + 20.0 * dt, 3.2)
 	else:
 		vel.y = maxf(-45.0, vel.y - 26.0 * dt)

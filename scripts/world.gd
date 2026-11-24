@@ -16,6 +16,11 @@ const H := 64
 const CH := 16
 ## How many chunks around the hero are kept loaded and drawn.
 const VIEW := 10
+## How many chunks around you are loaded: VIEW on the high graphics setting,
+## fewer on phones.
+var view := VIEW
+## Grass tufts and flowers on block tops (off on the phone setting).
+var plants := true
 ## The world seed. The same seed always gives the same world.
 const SEED := 1337
 const WATER := 7
@@ -1332,7 +1337,7 @@ func _mesh_volume(vol: PackedByteArray, ox: int, oz: int, lf: Array = []) -> Arr
 						uv2s.append(Vector2(lay, 0.0))
 					inds.append_array(PackedInt32Array([start, start + 1, start + 2, start + 2, start + 1, start + 3]))
 					# Grass tufts and flowers on open tops.
-					if f == 3 and ny < H and vol[ni] == AIR and _plant_of[b] > 0 and y >= WATER:
+					if plants and f == 3 and ny < H and vol[ni] == AIR and _plant_of[b] > 0 and y >= WATER:
 						_mesh_plant(b, x, y, z, (lits[0] + lits[1] + lits[2] + lits[3]) * 0.25, (warm[0] + warm[1] + warm[2] + warm[3]) * 0.25, tr, tg, tb, pv, pc, puv, puv2, pi)
 	return [verts, cols, inds, uvs, uv2s, pv, pc, pi, puv, puv2]
 
@@ -2329,9 +2334,9 @@ func stream(at: Vector3, budget_ms := 4.0) -> void:
 	if ck != _center:
 		_center = ck
 		_want.clear()
-		for dz in range(-VIEW, VIEW + 1):
-			for dx in range(-VIEW, VIEW + 1):
-				if dx * dx + dz * dz <= VIEW * VIEW:
+		for dz in range(-view, view + 1):
+			for dx in range(-view, view + 1):
+				if dx * dx + dz * dz <= view * view:
 					_want.append(Vector2i(ck.x + dx, ck.y + dz))
 		_want.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
 			return (a - ck).length_squared() < (b - ck).length_squared())
@@ -2346,7 +2351,7 @@ func stream(at: Vector3, budget_ms := 4.0) -> void:
 		var k: Vector2i = res["key"]
 		WorkerThreadPool.wait_for_task_completion(_pending[k])
 		_pending.erase(k)
-		if (k - _center).length_squared() > (VIEW + 2) * (VIEW + 2) and not _cdata.has(k):
+		if (k - _center).length_squared() > (view + 2) * (view + 2) and not _cdata.has(k):
 			continue
 		var touches := false
 		for n in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
@@ -2379,7 +2384,7 @@ func stream(at: Vector3, budget_ms := 4.0) -> void:
 	# Meshes for chunks whose blocks are known, a few per frame.
 	while not _main_queue.is_empty() and (Time.get_ticks_usec() - t0) < budget_ms * 1000.0:
 		var k: Vector2i = _main_queue.pop_front()
-		if (k - _center).length_squared() <= (VIEW + 1) * (VIEW + 1):
+		if (k - _center).length_squared() <= (view + 1) * (view + 1):
 			_mesh_main(k)
 
 	# New work for the workers, nearest first.
@@ -2401,7 +2406,7 @@ func stream(at: Vector3, budget_ms := 4.0) -> void:
 	_unload_t -= 1.0 / 60.0
 	if _unload_t <= 0.0:
 		_unload_t = 1.0
-		var far := (VIEW + 3) * (VIEW + 3)
+		var far := (view + 3) * (view + 3)
 		for k in _chunks.keys():
 			var kk: Vector2i = k
 			if is_island_chunk(kk) or (kk - _center).length_squared() <= far:
@@ -2420,6 +2425,19 @@ func stream(at: Vector3, budget_ms := 4.0) -> void:
 			_lights.erase(kk)
 			if _last_k == kk:
 				_last_k = Vector2i(1 << 30, 0)
+
+
+## Changes how far the world loads and whether plants are drawn. Chunks
+## already in view are re-meshed a few per frame.
+func set_detail(new_view: int, new_plants: bool) -> void:
+	var replant := new_plants != plants
+	view = new_view
+	plants = new_plants
+	_center = Vector2i(1 << 30, 0)
+	if replant:
+		for k in _chunks.keys():
+			if not _main_queue.has(k):
+				_main_queue.append(k)
 
 
 ## How many chunks are drawn and how many are still being made.
