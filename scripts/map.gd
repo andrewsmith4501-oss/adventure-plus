@@ -258,7 +258,10 @@ class View extends Control:
 			elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
 				zoom_by(1.0 / 1.2, mb.position)
 			elif mb.button_index == MOUSE_BUTTON_LEFT:
-				_drag_from = mb.position if mb.pressed else null
+				if mb.pressed:
+					_drag_from = mb.position
+				else:
+					_drag_from = null
 			accept_event()
 		elif ev is InputEventMouseMotion and _drag_from != null:
 			if _touches.size() >= 2:

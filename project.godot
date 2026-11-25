@@ -1,5 +1,5 @@
 ; Engine configuration file.
-; Godot 4.3 or newer.
+; Made for Godot 4.7.
 
 config_version=5
 
@@ -10,7 +10,12 @@ config/description="Co-op sandbox adventure: gather, build and craft, then climb
 run/main_scene="res://main.tscn"
 config/quit_on_go_back=false
 config/icon="res://icon.png"
-config/features=PackedStringArray("4.3", "GL Compatibility")
+config/features=PackedStringArray("4.7", "GL Compatibility")
+
+[debug]
+
+; The voxel code divides whole numbers on purpose (chunk and block maths).
+gdscript/warnings/integer_division=0
 
 [display]
 

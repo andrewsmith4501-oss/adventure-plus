@@ -94,10 +94,10 @@ func _active() -> bool:
 
 
 func _process(_dt: float) -> void:
-	var show := _active()
-	if visible != show:
-		visible = show
-		if not show:
+	var want := _active()
+	if visible != want:
+		visible = want
+		if not want:
 			_release_all()
 	if visible:
 		_layout()
