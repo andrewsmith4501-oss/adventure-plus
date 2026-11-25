@@ -198,7 +198,14 @@ func _run() -> void:
 	check(not game.block_held, "letting go of LT lowers it")
 	game.slots[0] = {"id": "planks", "n": 5}
 	game.select_slot(0)
-	p.cam_pitch = -1.2
+	# Aim at the ground a step ahead, in first person so the hero isn't in the way.
+	var was_fp: bool = p.first_person
+	p.first_person = true
+	p.cam_pitch = -0.9
+	for i in 60:
+		if p.grounded:
+			break
+		await frames(1)
 	await frames(3)
 	var before: int = game.count("planks")
 	axis(JOY_AXIS_TRIGGER_LEFT, 1.0)
@@ -207,6 +214,7 @@ func _run() -> void:
 	await frames(2)
 	check(game.count("planks") == before - 1, "LT with a block in hand places it instead of raising the shield (planks %d -> %d)" % [before, game.count("planks")])
 	check(not game.block_held, "LT with a block doesn't raise the shield")
+	p.first_person = was_fp
 
 	# Hotbar with the bumpers.
 	game.select_slot(3)
