@@ -62,6 +62,7 @@ func _release_all() -> void:
 	jump_held = false
 	if game != null:
 		game.mouse_down = false
+		game.block_held = false
 
 
 ## Lays the buttons out for the current screen size (in UI units).
@@ -76,11 +77,13 @@ func _layout() -> void:
 	_buttons["glide"] = [br + Vector2(0, -122), r - 4.0, "Glide", "tap"]
 	_buttons["climb"] = [br + Vector2(-104, -100), r - 4.0, "Climb", "tap"]
 	_buttons["sprint"] = [br + Vector2(-80, -206), r - 10.0, "Sprint", "hold"]
+	if game != null and not game.best_shield().is_empty():
+		_buttons["block"] = [br + Vector2(-222, 38), r - 6.0, "Block", "hold"]
 	var prompt: String = game.hud.prompt_label.text if game != null else ""
 	if prompt != "":
 		_buttons["use"] = [br + Vector2(-214, -170), r - 2.0, "Use", "tap"]
 	var top := Vector2(sz.x - 34, 92)
-	var smalls := [["pause", "II"], ["inv", "Bag"], ["craft", "Craft"], ["quest", "Quest"], ["view", "View"]]
+	var smalls := [["pause", "II"], ["map", "Map"], ["inv", "Bag"], ["craft", "Craft"], ["quest", "Quest"], ["view", "View"]]
 	for i in smalls.size():
 		_buttons[smalls[i][0]] = [top - Vector2(i * 64, 0), 27.0, smalls[i][1], "small"]
 	_order = _buttons.keys()
@@ -208,6 +211,8 @@ func _lift(i: int) -> void:
 		move = Vector2.ZERO
 	elif role == "hit":
 		game.mouse_down = false
+	elif role == "block":
+		game.block_held = false
 	elif role == "sprint":
 		sprint = false
 	elif role == "jump":
@@ -224,6 +229,10 @@ func _button_down(b: String) -> void:
 			game.set("_deny_warned", false)
 		"place":
 			game.place_block()
+		"block":
+			game.block_held = true
+		"map":
+			game.toggle_map()
 		"glide":
 			game.player.toggle_glide()
 		"climb":
@@ -266,7 +275,7 @@ func _paint() -> void:
 		var c: Vector2 = b[0]
 		var r: float = b[1]
 		var on: bool = held.has(n)
-		var lit: bool = (n == "sprint" and sprint) or (n == "glide" and game.player.mode == "glide") or (n == "climb" and game.player.mode == "climb")
+		var lit: bool = (n == "sprint" and sprint) or (n == "glide" and game.player.mode == "glide") or (n == "climb" and game.player.mode == "climb") or (n == "block" and game.blocking)
 		var col := Color(0.95, 0.78, 0.36, 0.6) if (on or lit) else fill
 		_draw.draw_circle(c, r, col)
 		_draw.draw_arc(c, r, 0, TAU, 40, edge, 2.0, true)

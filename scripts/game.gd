@@ -12,6 +12,7 @@ const Audio = preload("res://scripts/audio.gd")
 const Npc = preload("res://scripts/npc.gd")
 const TouchControls = preload("res://scripts/touch.gd")
 const Art = preload("res://scripts/art.gd")
+const MapData = preload("res://scripts/map.gd")
 
 var items := {
 	"dirt": {"name": "Dirt", "color": Color("865e3b"), "block": World.DIRT},
@@ -43,6 +44,10 @@ var items := {
 	"ipick": {"name": "Iron Pick", "color": Color("d8dce2"), "pick": 2},
 	"isword": {"name": "Iron Sword", "color": Color("d8dce2"), "damage": 4},
 	"sunsword": {"name": "Sunstone Sword", "color": Color("ffc85a"), "damage": 6},
+	# Shields work from anywhere in your inventory (the best one is used).
+	# "guard" is the stamina a blocked hit costs.
+	"wshield": {"name": "Wooden Shield", "color": Color("b48a52"), "shield": 1, "guard": 22.0},
+	"ishield": {"name": "Iron Shield", "color": Color("c4cad2"), "shield": 2, "guard": 11.0},
 }
 var drops := {
 	World.GRASS: "dirt", World.DRYGRASS: "dirt", World.DIRT: "dirt", World.STONE: "stone",
@@ -95,6 +100,8 @@ var recipes := [
 	{"out": "iron", "n": 1, "need": {"iron_ore": 1, "coal": 1}, "station": "furnace"},
 	{"out": "ipick", "n": 1, "need": {"iron": 3, "stick": 2}, "station": "workbench"},
 	{"out": "isword", "n": 1, "need": {"iron": 2, "stick": 1}, "station": "workbench"},
+	{"out": "wshield", "n": 1, "need": {"planks": 5, "stick": 1}, "station": "workbench"},
+	{"out": "ishield", "n": 1, "need": {"iron": 3, "planks": 2}, "station": "workbench"},
 	{"out": "sunsword", "n": 1, "need": {"sunstone": 2, "iron": 2, "stick": 1}, "station": "workbench"},
 ]
 ## Blocks that crafting stations are made of.
@@ -141,6 +148,8 @@ var side := [
 	{"id": "iron", "text": "Smelt iron ore at a furnace"},
 	{"id": "ipick", "text": "Forge an Iron Pick", "needs": "iron"},
 	{"id": "sunstone", "text": "Mine Sunstone deep under a mountain", "needs": "ipick"},
+	{"id": "block", "text": "Block a Thornling with a shield", "needs": "shield"},
+	{"id": "parry", "text": "Perfect block: raise your shield just as it strikes", "needs": "block"},
 ]
 var done := {}
 
@@ -263,6 +272,18 @@ var _time := 0.0
 
 ## Where the world is saved. Set to "" before the game is added to the
 ## tree to play without saving (the tests do).
+## The map that fills in as you explore (map.gd).
+var map: MapData
+var _map_t := 0.0
+
+## Shield: held up while block_held (right mouse, X, or the Block button).
+var block_held := false
+var blocking := false
+var _block_t := 0.0
+var _shield_shown := ""
+var _shield_hint := false
+const PARRY_WINDOW := 0.3
+
 var save_path := "user://world.save"
 const SAVE_VERSION := 1
 const AUTOSAVE_EVERY := 45.0
@@ -280,6 +301,7 @@ func _ready() -> void:
 	add_child(audio)
 
 	_add_wild_items()
+	map = MapData.new()
 	world = World.new()
 	add_child(world)
 	world.generate()
@@ -327,6 +349,8 @@ func _ready() -> void:
 	hud.play_pressed.connect(_resume)
 	hud.craft_closed.connect(_resume)
 	hud.inv_closed.connect(_resume)
+	hud.map_closed.connect(_resume)
+	hud.map_view.map = map
 	hud.inv_clicked.connect(_inv_click)
 	hud.respawn_pressed.connect(_respawn)
 	hud.craft_requested.connect(_craft)
@@ -792,7 +816,14 @@ func _render_hotbar() -> void:
 	if hud.screens["inv"].visible:
 		hud.render_inventory(slots, cursor, items)
 	var s = slots[sel]
-	player.set_held(sel_item(), item_mesh(s["id"]) if s != null else null)
+	# A shield is worn on your back (and raised to block), not held in hand.
+	var show_held: bool = s != null and not items[s["id"]].has("shield")
+	player.set_held(sel_item(), item_mesh(s["id"]) if show_held else null)
+	var sh := best_shield()
+	var sid: String = sh.get("id", "")
+	if sid != _shield_shown:
+		_shield_shown = sid
+		player.set_shield(item_mesh(sid) if sid != "" else null)
 
 
 func select_slot(i: int) -> void:
@@ -1079,8 +1110,10 @@ func _reward() -> void:
 
 # ---------------------------------------------------------------- health
 
-func hurt_player(amount: int, from) -> void:
+func hurt_player(amount: int, from, attacker = null) -> void:
 	if player.dead or player.invuln > 0.0:
+		return
+	if from != null and _try_block(from, attacker):
 		return
 	player.hp -= amount
 	player.invuln = 0.7
@@ -1103,6 +1136,94 @@ func hurt_player(amount: int, from) -> void:
 		mouse_down = false
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		hud.show_screen("dead")
+
+
+# ---------------------------------------------------------------- shield
+
+## The best shield in your inventory, or {} if you have none.
+func best_shield() -> Dictionary:
+	var best := {}
+	var best_id := ""
+	for s in slots:
+		if s == null:
+			continue
+		var it: Dictionary = items[s["id"]]
+		if it.get("shield", 0) > best.get("shield", 0):
+			best = it
+			best_id = s["id"]
+	if best_id != "":
+		best = best.duplicate()
+		best["id"] = best_id
+	return best
+
+
+func _update_shield(dt: float) -> void:
+	var sh := best_shield()
+	var want := block_held and not sh.is_empty() and player.mode == "walk" and not player.in_water and not player.exhausted
+	if want and not blocking:
+		_block_t = 0.0
+		audio.play("shield_up", -8.0)
+		if not done.has("shield"):
+			complete("shield")
+	blocking = want
+	player.blocking = blocking
+	if blocking:
+		_block_t += dt
+		mouse_down = false
+		if not player.first_person:
+			player._turn_toward(player.cam_yaw, 16.0 * dt)
+	if block_held and sh.is_empty() and not _shield_hint:
+		_shield_hint = true
+		toast("No shield yet: make a Wooden Shield at a workbench (5 planks, 1 stick)")
+
+
+## A hit from the front while your shield is up is blocked: it costs some
+## stamina instead of a heart, and knocks the attacker back. Raising the
+## shield just as the hit lands is a perfect block: it costs nothing and
+## stuns the attacker. Returns true if the hit was blocked.
+func _try_block(from: Vector3, attacker) -> bool:
+	if not blocking:
+		return false
+	var to := from - player.pos
+	to.y = 0.0
+	if to.length() < 0.01:
+		return false
+	var facing := Vector3(-sin(player.yaw), 0.0, -cos(player.yaw))
+	if facing.dot(to.normalized()) < 0.25:
+		return false  # from the side or behind
+	var sh := best_shield()
+	var perfect := _block_t <= PARRY_WINDOW
+	var cost: float = 0.0 if perfect else float(sh.get("guard", 20.0))
+	if player.stamina < cost:
+		# Not enough stamina: the guard breaks and the hit gets through.
+		player.use_stamina(player.stamina)
+		blocking = false
+		player.blocking = false
+		audio.play("deny", -2.0)
+		toast("Your guard broke! Let your stamina refill")
+		return false
+	player.use_stamina(cost)
+	player.invuln = 0.5
+	var away := -to.normalized()
+	player.vel = Vector3(away.x * 3.0, 1.5, away.z * 3.0)
+	if attacker != null and attacker.has_method("hit"):
+		attacker.hit(0, player.pos)
+		if perfect:
+			attacker.vel *= 1.6
+			attacker.hurt_t = 1.1
+			attacker.hop_t = 1.6
+	if perfect:
+		audio.play("shield_parry", -2.0, 0.03)
+		player.flash_shield(true)
+		if not done.has("parry"):
+			toast("Perfect block!")
+		complete("block")
+		complete("parry")
+	else:
+		audio.play("shield_block", -2.0)
+		player.flash_shield(false)
+		complete("block")
+	return true
 
 
 func _respawn() -> void:
@@ -1141,6 +1262,7 @@ func _pause() -> void:
 	save_game()
 	running = false
 	mouse_down = false
+	block_held = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	hud.set_paused_title(started)
 	hud.show_screen("start")
@@ -1265,18 +1387,29 @@ func _unhandled_input(event: InputEvent) -> void:
 			mouse_down = mb.pressed
 			if mb.pressed:
 				_deny_warned = false
-		elif mb.pressed and mb.button_index == MOUSE_BUTTON_RIGHT:
-			_place_block()
+		elif mb.button_index == MOUSE_BUTTON_RIGHT:
+			# Right click places the selected block; with anything else in
+			# hand, holding it raises your shield.
+			if not mb.pressed:
+				block_held = false
+			elif sel_item().has("block"):
+				_place_block()
+			else:
+				block_held = true
 		elif mb.pressed and mb.button_index == MOUSE_BUTTON_WHEEL_UP:
 			select_slot(sel - 1)
 		elif mb.pressed and mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			select_slot(sel + 1)
 	elif event is InputEventKey:
 		var k := event as InputEventKey
+		if k.physical_keycode == KEY_X and not k.echo:
+			block_held = k.pressed
 		if not k.pressed or k.echo:
 			return
 		var code := k.physical_keycode
-		if code == KEY_C:
+		if code == KEY_M:
+			toggle_map()
+		elif code == KEY_C:
 			if hud.screens["inv"].visible:
 				_resume()
 			_toggle_craft()
@@ -1290,7 +1423,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				hud.hide_dialog()
 			elif running:
 				_pause()
-			elif hud.screens["craft"].visible or hud.screens["inv"].visible:
+			elif hud.screens["craft"].visible or hud.screens["inv"].visible or hud.screens["map"].visible:
 				_resume()
 		elif not running:
 			return
@@ -1344,6 +1477,24 @@ func toggle_craft() -> void:
 	if hud.screens["inv"].visible:
 		_resume()
 	_toggle_craft()
+
+
+func toggle_map() -> void:
+	if hud.screens["map"].visible:
+		_resume()
+		return
+	if hud.screens["craft"].visible or hud.screens["inv"].visible:
+		_resume()
+	if not running or talking():
+		return
+	running = false
+	mouse_down = false
+	block_held = false
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	map.reveal(world, player.pos, _sight(), true)
+	_update_map_view(true)
+	hud.show_screen("map")
+	audio.play("map_open", -4.0)
 
 
 # ---------------------------------------------------------------- graphics
@@ -1448,6 +1599,7 @@ func _process(delta: float) -> void:
 				e.visible = false
 				e.respawn_t = 3.0 + _rng.randf() * 8.0
 			e.update(dt, world, player, self)
+		_update_shield(dt)
 		_update_interaction(dt)
 		_update_hollow()
 		_update_shrine()
@@ -1473,6 +1625,7 @@ func _process(delta: float) -> void:
 	_sea_floor.position.x = _water.position.x
 	_sea_floor.position.z = _water.position.z
 	_update_region(dt)
+	_update_map(dt)
 	_update_vents(dt)
 	_update_lights(dt)
 	_update_shadows()
@@ -1535,6 +1688,60 @@ func _compass_markers() -> Array:
 		if Vector2(tv.x - player.pos.x, tv.z - player.pos.z).length() > 4.0:
 			out.append({"bearing": _bearing(tv), "color": Color("f2b84b"), "label": "Quest"})
 	return out
+
+
+# ---------------------------------------------------------------- map
+
+## How far you can see to fill in the map: further when high above the ground.
+func _sight() -> float:
+	var ground := player.pos.y
+	var top = world._ctop.get(Vector2i(floori(player.pos.x) >> 4, floori(player.pos.z) >> 4))
+	if top != null:
+		ground = top[(floori(player.pos.x) & 15) + ((floori(player.pos.z) & 15) << 4)] + 1.0
+	var above := clampf((player.pos.y - ground) / 20.0, 0.0, 1.0)
+	if underground():
+		return 12.0
+	return MapData.SIGHT + MapData.SIGHT_HIGH * above
+
+
+func _update_map(dt: float) -> void:
+	_map_t -= dt
+	if _map_t > 0.0 or not started:
+		return
+	_map_t = 0.15
+	map.reveal(world, player.pos, _sight())
+
+
+## Places worth marking on the map: the camp, your quest, and landmarks
+## you have found.
+func map_markers() -> Array:
+	var out := [{"pos": Vector2(World.CAMP_X, World.CAMP_Z), "color": Color("f4efe3"), "label": "Camp"}]
+	if _seen_regions.has("hollow") or done.has("hollow"):
+		out.append({"pos": Vector2(World.MESA_CX, World.MESA_CZ), "color": Color("9fd8e8"), "label": "Windworn Hollow"})
+	if _seen_regions.has("shrine") or done.has("shrine_find"):
+		out.append({"pos": Vector2((World.SHRINE_X0 + World.SHRINE_X1) / 2.0, (World.SHRINE_Z0 + World.SHRINE_Z1) / 2.0), "color": Color("9fd8e8"), "label": "Hearthroot Shrine"})
+	if map.explored(World.NEEDLE_X, World.NEEDLE_Z):
+		out.append({"pos": Vector2(World.NEEDLE_X, World.NEEDLE_Z), "color": Color("79f0ff"), "label": "Needle Rock"})
+	if map.explored(wren.pos.x, wren.pos.z):
+		out.append({"pos": Vector2(wren.pos.x, wren.pos.z), "color": Color("e6d3a8"), "label": "Wren"})
+	var t = _quest_target()
+	if t != null:
+		var tv: Vector3 = t
+		out.append({"pos": Vector2(tv.x, tv.z), "color": Color("f2b84b"), "label": "Quest"})
+	return out
+
+
+func _update_map_view(recenter := false) -> void:
+	var v := hud.map_view
+	v.you = Vector2(player.pos.x, player.pos.z)
+	v.you_yaw = player.yaw
+	v.markers = map_markers()
+	if recenter or v.follow:
+		v.center = v.you
+	var r: String = world.region_at(player.pos + Vector3(0, 0.5, 0))
+	var name: String = REGIONS.get(r, [r.capitalize()])[0]
+	hud.map_info.text = "%s    x %d, z %d" % [name, floori(player.pos.x), floori(player.pos.z)]
+	v.queue_redraw()
 
 
 func _update_region(dt: float) -> void:
@@ -2035,7 +2242,9 @@ func _update_interaction(dt: float) -> void:
 		player._turn_toward(player.cam_yaw, 20.0 * dt)
 
 	var breaking := false
-	if mouse_down and tg.has("enemy"):
+	if blocking:
+		pass  # the shield is up: no swinging or digging
+	elif mouse_down and tg.has("enemy"):
 		if player.attack_cd <= 0.0:
 			var it := sel_item()
 			var dmg: int = it.get("damage", 1)
@@ -2182,6 +2391,7 @@ func save_data() -> Dictionary:
 		},
 		"npcs": {"bryn": bryn.pos, "wren": wren_at},
 		"volume": {"music": hud.music_slider.value, "sound": hud.sound_slider.value},
+		"map": map.to_save(),
 	}
 
 
@@ -2275,6 +2485,7 @@ func apply_save(d: Dictionary) -> void:
 	var np: Dictionary = d.get("npcs", {})
 	bryn.pos = np.get("bryn", bryn.pos)
 	wren.pos = np.get("wren", wren.pos)
+	map.from_save(d.get("map", {}))
 	var vol: Dictionary = d.get("volume", {})
 	if vol.has("music"):
 		hud.music_slider.value = vol["music"]

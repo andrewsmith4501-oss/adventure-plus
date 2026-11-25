@@ -3,6 +3,8 @@ extends CanvasLayer
 ## goals, toasts and the start, crafting and knocked-out screens.
 
 const INV_HELP := "Click to pick up a stack and click again to put it down. Right-click takes half, or puts down one. Shift-click moves a stack between your pack and the hotbar. Drop a stack on the bin to throw it away."
+const MAP_HELP := "Drag to look around, scroll to zoom. M or Esc closes the map."
+const MAP_HELP_TOUCH := "Drag to look around, pinch or use + and - to zoom."
 const INV_HELP_TOUCH := "Tap a stack to pick it up and tap again to put it down. The Tap button switches to taking half (or putting down one), or to quick-moving stacks between your pack and the hotbar. Drop a stack on the bin to throw it away."
 
 signal play_pressed
@@ -15,8 +17,10 @@ signal craft_requested(index: int)
 signal music_volume_changed(value: float)
 signal sound_volume_changed(value: float)
 signal graphics_toggled
+signal map_closed
 
 const Art = preload("res://scripts/art.gd")
+const MapData = preload("res://scripts/map.gd")
 const ACCENT := Color("f2b84b")
 const INK := Color("f4efe3")
 const INK_DIM := Color("c9c2b0")
@@ -188,6 +192,9 @@ var touch_grid: GridContainer
 var dialog_hint: Label
 var inv_help: Label
 var tap_button: Button
+var map_view: MapData.View
+var map_info: Label
+var map_hint: Label
 ## Phone inventory: what a tap does (0 move a stack, 1 take half or put one,
 ## 2 quick move between pack and hotbar).
 var tap_mode := 0
@@ -320,6 +327,7 @@ func _ready() -> void:
 	_build_craft_screen()
 	_build_inventory_screen()
 	_build_dead_screen()
+	_build_map_screen()
 
 
 # ---------------------------------------------------------------- helpers
@@ -424,6 +432,8 @@ func _build_start_screen() -> void:
 		["Q", "Switch the quest shown on screen"],
 		["C", "Open crafting"],
 		["E or I", "Open your inventory"],
+		["M", "Open the map. It fills in as you explore"],
+		["Right click, X", "Hold to raise your shield (when you have one and aren't holding a block)"],
 		["V", "Switch between third and first person"],
 		["Esc", "Pause"],
 	]
@@ -444,10 +454,11 @@ func _build_start_screen() -> void:
 		["Jump", "Jump. On a wall: leap up. Hold in water to swim up"],
 		["Glide / Climb", "Open the glider in the air. Grab a wall, or let go"],
 		["Hit", "Hold to break a block, tap to attack"],
+		["Block", "Hold to raise your shield (once you have one)"],
 		["Place", "Place the selected block where you aim"],
 		["Use", "Talk, read, open, push (shows up when you can)"],
 		["Hotbar", "Tap a slot to choose it"],
-		["Bag, Craft, Quest, View, II", "Inventory, crafting, switch quest, camera, pause"],
+		["Map, Bag, Craft, Quest, View, II", "Map, inventory, crafting, switch quest, camera, pause"],
 	]
 	for k in taps:
 		touch_grid.add_child(_label(k[0], 15, ACCENT))
@@ -510,6 +521,7 @@ func set_touch_mode(on: bool) -> void:
 	touch_grid.visible = on
 	dialog_hint.text = "Tap to continue" if on else "F or click to continue"
 	tap_button.visible = on
+	map_hint.text = MAP_HELP_TOUCH if on else MAP_HELP
 	inv_help.text = INV_HELP_TOUCH if on else INV_HELP
 
 
@@ -648,6 +660,57 @@ func render_inventory(slots: Array, cursor, items: Dictionary) -> void:
 	cursor_icon.visible = cursor != null
 	if cursor != null:
 		_add_stack(cursor_icon, cursor, items)
+
+
+## The map: nearly the whole screen, with zoom buttons and a way back.
+func _build_map_screen() -> void:
+	var dim := ColorRect.new()
+	dim.color = Color(0.04, 0.055, 0.047, 0.75)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	root.add_child(dim)
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", _style(Color("18201b"), 12, 14, 16, EDGE, 1))
+	_place(panel, 0, 0, 1, 1, 28, 22, -28, -22)
+	dim.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	panel.add_child(box)
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 14)
+	box.add_child(head)
+	head.add_child(_label("Map", 26))
+	map_info = _label("", 15, ACCENT)
+	map_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	map_info.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	head.add_child(map_info)
+	map_view = MapData.View.new()
+	map_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	map_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(map_view)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	box.add_child(row)
+	var zin := _button("+")
+	zin.custom_minimum_size = Vector2(52, 0)
+	zin.pressed.connect(func() -> void: map_view.zoom_by(1.5))
+	row.add_child(zin)
+	var zout := _button("-")
+	zout.custom_minimum_size = Vector2(52, 0)
+	zout.pressed.connect(func() -> void: map_view.zoom_by(1.0 / 1.5))
+	row.add_child(zout)
+	var me := _button("Find me")
+	me.pressed.connect(func() -> void: map_view.recenter())
+	row.add_child(me)
+	map_hint = _label(MAP_HELP, 14, INK_DIM, true)
+	map_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	map_hint.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(map_hint)
+	var close := _button("Back to the world")
+	close.pressed.connect(func() -> void: map_closed.emit())
+	row.add_child(close)
+	screens["map"] = dim
+	dim.visible = false
 
 
 func _build_dead_screen() -> void:
