@@ -428,9 +428,12 @@ func _make_screen(key: String, title: String, body: String) -> VBoxContainer:
 
 func _build_start_screen() -> void:
 	var box := _make_screen("start", "Adventure Plus", "Gather and build in the meadows of Hearthvale, help the villagers, solve the Loomwright shrine and climb into the windswept Gale Steppes, where something stirs inside the great mesa. Talk to Bryn at the camp to begin.")
+	# Two keys per row, so the Play button fits on short screens (and in a
+	# web browser window).
 	var grid := GridContainer.new()
-	grid.columns = 2
+	grid.columns = 4
 	grid.add_theme_constant_override("h_separation", 14)
+	grid.add_theme_constant_override("v_separation", 6)
 	var keys := [
 		["Mouse", "Look around"],
 		["W A S D", "Move. Walk into a tall wall to climb it"],
@@ -451,7 +454,7 @@ func _build_start_screen() -> void:
 	for k in keys:
 		grid.add_child(_label(k[0], 15, ACCENT))
 		var desc := _label(k[1], 15, INK, true)
-		desc.custom_minimum_size = Vector2(360, 0)
+		desc.custom_minimum_size = Vector2(250, 0)
 		grid.add_child(desc)
 	box.add_child(grid)
 	keys_grid = grid
