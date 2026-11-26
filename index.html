@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Adventure Plus</title>
+<meta name="description" content="Gather, build and craft, then climb, glide and fight across a voxel world. Play in your browser or get the Android app.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Adventure Plus">
+<meta property="og:description" content="Gather, build and craft, then climb, glide and fight across a voxel world. Play in your browser or get the Android app.">
+<meta property="og:image" content="https://andrewsmith4501-oss.github.io/adventure-plus/og.jpg">
+<meta property="og:url" content="https://andrewsmith4501-oss.github.io/adventure-plus/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#18201b">
+<link rel="icon" href="play/index.icon.png">
+<style>
+  :root {
+    --bg: #18201b; --panel: #222c25; --edge: #34413a; --ink: #eef1ea; --dim: #b4bdb2;
+    --accent: #f0b84b; --accent-ink: #2a2208; --btn2: #3a423c;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 17px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 2.2rem; margin: 8px 0 4px; letter-spacing: .01em; }
+  .tag { color: var(--dim); margin: 0 0 18px; }
+  .shot { width: 100%; border-radius: 12px; border: 1px solid var(--edge); display: block; aspect-ratio: 16/9; object-fit: cover; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 12px; margin: 20px 0 8px; }
+  .btn { flex: 1 1 260px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 14px 18px; border-radius: 10px; text-decoration: none; font-weight: 700; font-size: 1.15rem; min-height: 64px; text-align: center; }
+  .btn small { font-weight: 400; font-size: .85rem; opacity: .85; }
+  .play { background: var(--accent); color: var(--accent-ink); }
+  .apk { background: var(--btn2); color: var(--ink); border: 1px solid var(--edge); }
+  .btn:hover { filter: brightness(1.08); }
+  .btn:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+  section { background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; padding: 16px 20px; margin-top: 18px; }
+  h2 { font-size: 1.2rem; margin: 0 0 8px; color: var(--accent); }
+  ol, ul { margin: 0; padding-left: 1.3em; }
+  li { margin: 4px 0; }
+  .note { color: var(--dim); font-size: .92rem; margin-top: 8px; }
+  kbd { background: var(--btn2); border: 1px solid var(--edge); border-radius: 4px; padding: 0 5px; font: inherit; font-size: .9em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Adventure Plus</h1>
+  <p class="tag">Gather, build and craft, then climb, glide and fight your way across Hearthvale and the windswept Gale Steppes.</p>
+  <img class="shot" src="preview.jpg" alt="The hero standing in a flowery meadow below grassy cliffs and an old stone tower" width="1280" height="720">
+
+  <div class="buttons">
+    <a class="btn play" href="play/">Play in your browser<small>PC, Mac, Android or iPhone. Nothing to install</small></a>
+    <a class="btn apk" href="AdventurePlus.apk" download>Download for Android<small>The phone app (about 30 MB)</small></a>
+  </div>
+
+  <section>
+    <h2>Playing in the browser</h2>
+    <ul>
+      <li>Works best in Chrome, Edge or Firefox on a computer. The first load takes a little while (about 12 MB).</li>
+      <li>On a computer: click <b>Play</b>, then use the mouse to look and <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to move. <kbd>Esc</kbd> pauses. A game controller works too.</li>
+      <li>On a phone: turn it sideways. Tap once and the game goes full screen with on-screen controls.</li>
+      <li>Your world saves in the browser on that device, so come back with the same browser to continue.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Installing on an Android phone</h2>
+    <ol>
+      <li>Tap <b>Download for Android</b> above.</li>
+      <li>When it finishes, tap the downloaded file (or find <b>AdventurePlus.apk</b> in your Downloads).</li>
+      <li>If your phone asks, allow your browser to <b>install unknown apps</b>, then go back and tap <b>Install</b>.</li>
+      <li>If Play Protect warns that the app is from an unknown developer, tap <b>More details</b> then <b>Install anyway</b>. It is a game made by a friend, not from the Play Store.</li>
+    </ol>
+    <p class="note">To update later, download it again and install over the old one. Your phone world is kept.</p>
+  </section>
+</main>
+</body>
+</html>
