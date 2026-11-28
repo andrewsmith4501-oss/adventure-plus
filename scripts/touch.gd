@@ -32,6 +32,12 @@ var _buttons := {}
 var _order: Array = []
 
 
+## True on a phone or tablet: the Android app, or the game opened in a
+## phone's web browser.
+static func is_phone() -> bool:
+	return OS.has_feature("mobile") or OS.has_feature("web_android") or OS.has_feature("web_ios")
+
+
 func _ready() -> void:
 	layer = 5
 	_font = ThemeDB.fallback_font
@@ -41,7 +47,7 @@ func _ready() -> void:
 	_draw.draw.connect(_paint)
 	add_child(_draw)
 	visible = false
-	if OS.has_feature("mobile"):
+	if is_phone():
 		set_enabled(true)
 
 
@@ -62,6 +68,7 @@ func _release_all() -> void:
 	jump_held = false
 	if game != null:
 		game.mouse_down = false
+		game.block_held = false
 
 
 ## Lays the buttons out for the current screen size (in UI units).
@@ -76,11 +83,13 @@ func _layout() -> void:
 	_buttons["glide"] = [br + Vector2(0, -122), r - 4.0, "Glide", "tap"]
 	_buttons["climb"] = [br + Vector2(-104, -100), r - 4.0, "Climb", "tap"]
 	_buttons["sprint"] = [br + Vector2(-80, -206), r - 10.0, "Sprint", "hold"]
+	if game != null and not game.best_shield().is_empty():
+		_buttons["block"] = [br + Vector2(-222, 38), r - 6.0, "Block", "hold"]
 	var prompt: String = game.hud.prompt_label.text if game != null else ""
 	if prompt != "":
 		_buttons["use"] = [br + Vector2(-214, -170), r - 2.0, "Use", "tap"]
 	var top := Vector2(sz.x - 34, 92)
-	var smalls := [["pause", "II"], ["inv", "Bag"], ["craft", "Craft"], ["quest", "Quest"], ["view", "View"]]
+	var smalls := [["pause", "II"], ["map", "Map"], ["inv", "Bag"], ["craft", "Craft"], ["quest", "Quest"], ["view", "View"]]
 	for i in smalls.size():
 		_buttons[smalls[i][0]] = [top - Vector2(i * 64, 0), 27.0, smalls[i][1], "small"]
 	_order = _buttons.keys()
@@ -91,10 +100,10 @@ func _active() -> bool:
 
 
 func _process(_dt: float) -> void:
-	var show := _active()
-	if visible != show:
-		visible = show
-		if not show:
+	var want := _active()
+	if visible != want:
+		visible = want
+		if not want:
 			_release_all()
 	if visible:
 		_layout()
@@ -105,10 +114,10 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch or event is InputEventScreenDrag:
 		if not enabled:
 			set_enabled(true)
-	elif event is InputEventKey and event.pressed and not OS.has_feature("mobile"):
+	elif event is InputEventKey and event.pressed and not is_phone():
 		set_enabled(false)
 		return
-	elif event is InputEventMouseMotion and event.device != InputEvent.DEVICE_ID_EMULATION and not OS.has_feature("mobile"):
+	elif event is InputEventMouseMotion and event.device != InputEvent.DEVICE_ID_EMULATION and not is_phone():
 		# A real mouse moved: go back to mouse and keyboard.
 		if (event as InputEventMouseMotion).relative.length() > 4.0 and _fingers.is_empty():
 			set_enabled(false)
@@ -208,6 +217,8 @@ func _lift(i: int) -> void:
 		move = Vector2.ZERO
 	elif role == "hit":
 		game.mouse_down = false
+	elif role == "block":
+		game.block_held = false
 	elif role == "sprint":
 		sprint = false
 	elif role == "jump":
@@ -224,6 +235,10 @@ func _button_down(b: String) -> void:
 			game.set("_deny_warned", false)
 		"place":
 			game.place_block()
+		"block":
+			game.block_held = true
+		"map":
+			game.toggle_map()
 		"glide":
 			game.player.toggle_glide()
 		"climb":
@@ -266,7 +281,7 @@ func _paint() -> void:
 		var c: Vector2 = b[0]
 		var r: float = b[1]
 		var on: bool = held.has(n)
-		var lit: bool = (n == "sprint" and sprint) or (n == "glide" and game.player.mode == "glide") or (n == "climb" and game.player.mode == "climb")
+		var lit: bool = (n == "sprint" and sprint) or (n == "glide" and game.player.mode == "glide") or (n == "climb" and game.player.mode == "climb") or (n == "block" and game.blocking)
 		var col := Color(0.95, 0.78, 0.36, 0.6) if (on or lit) else fill
 		_draw.draw_circle(c, r, col)
 		_draw.draw_arc(c, r, 0, TAU, 40, edge, 2.0, true)

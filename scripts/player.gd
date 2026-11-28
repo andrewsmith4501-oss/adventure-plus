@@ -52,6 +52,11 @@ var cam_cur := 4.6
 var first_person := false
 
 var held: Node3D
+## Shield: worn on the back, raised in front of you while blocking.
+var shield: Node3D
+var blocking := false
+var _shield_mi: MeshInstance3D
+var _shield_flash := 0.0
 var glider: Node3D
 var _wing_mats: Array = []
 var _hip_l: Node3D
@@ -154,6 +159,10 @@ func _build_model() -> void:
 	held.rotation.y = PI
 	_sh_r.add_child(held)
 
+	shield = Node3D.new()
+	shield.visible = false
+	add_child(shield)
+
 	glider = Node3D.new()
 	glider.position = Vector3(0, 2.55, 0.05)
 	glider.visible = false
@@ -214,6 +223,41 @@ func set_held(item: Dictionary, mesh: Mesh = null) -> void:
 		mi.rotation.z = -PI / 4.0
 		var grip := Vector3(-0.37, -0.37, 0)
 		mi.position = -(Basis(Vector3(0, 0, 1), -PI / 4.0) * grip) * sc
+
+
+## Shows a shield on the hero's back (or none, with null).
+func set_shield(mesh: Mesh) -> void:
+	for c in shield.get_children():
+		c.queue_free()
+	_shield_mi = null
+	shield.visible = mesh != null
+	if mesh == null:
+		return
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.scale = Vector3(0.62, 0.62, 0.62)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	shield.add_child(mi)
+	_shield_mi = mi
+	_place_shield(1.0)
+
+
+## A blocked hit makes the shield jolt (more for a perfect block).
+func flash_shield(perfect: bool) -> void:
+	_shield_flash = 1.0 if perfect else 0.6
+
+
+func _place_shield(k: float) -> void:
+	# On the back over the pack, or held up in front at the left hand.
+	var back_pos := Vector3(0.0, 1.12, -0.36)
+	var front_pos := Vector3(-0.12, 1.16, 0.46)
+	var to_pos := front_pos if blocking else back_pos
+	var to_rot := Vector3(0.0, 0.0, 0.0) if blocking else Vector3(0.12, PI, 0.0)
+	shield.position = shield.position.lerp(to_pos, k)
+	shield.rotation = Vector3(lerp_angle(shield.rotation.x, to_rot.x, k), lerp_angle(shield.rotation.y, to_rot.y, k), lerp_angle(shield.rotation.z, to_rot.z, k))
+	if _shield_flash > 0.0:
+		shield.position.z -= _shield_flash * 0.08
+		shield.rotation.x -= _shield_flash * 0.25
 
 
 # ---------------------------------------------------------------- helpers
@@ -319,7 +363,7 @@ func use_stamina(amount: float) -> void:
 
 func start_glide() -> void:
 	if game.count("glider") <= 0:
-		game.toast("Craft a Leaf Glider (C) to glide")
+		game.toast("Craft a Leaf Glider (%s) to glide" % game.hud.prompt_key("craft"))
 		return
 	if exhausted:
 		return
@@ -349,6 +393,12 @@ func update(dt: float, jump: bool) -> void:
 		in_f = clampf(in_f + touch.move.y, -1.0, 1.0)
 		in_r = clampf(in_r + touch.move.x, -1.0, 1.0)
 		shift = shift or touch.sprint
+	# A game controller's left stick and sprint button.
+	var pad = game.pad if game != null else null
+	if pad != null and pad.enabled:
+		in_f = clampf(in_f + pad.move.y, -1.0, 1.0)
+		in_r = clampf(in_r + pad.move.x, -1.0, 1.0)
+		shift = shift or pad.sprint
 	in_water = pos.y + 0.7 < World.WATER_SURF
 	if in_water and not _was_in_water and vel.y < -2.0:
 		game.audio.play("splash", -4.0)
@@ -462,8 +512,8 @@ func _update_glide(dt: float, f: Vector3, r: Vector3, in_f: float, in_r: float, 
 
 
 func _update_walk(dt: float, f: Vector3, r: Vector3, in_f: float, in_r: float, shift: bool, jump: bool) -> void:
-	var sprint := shift and grounded and in_f > 0 and not exhausted
-	var speed := (8.2 if sprint else 5.2) * (0.55 if in_water else 1.0)
+	var sprint := shift and grounded and in_f > 0 and not exhausted and not blocking
+	var speed := (8.2 if sprint else 5.2) * (0.55 if in_water else 1.0) * (0.5 if blocking else 1.0)
 	if sprint:
 		use_stamina(14.0 * dt)
 	var wish := f * in_f + r * in_r
@@ -480,7 +530,7 @@ func _update_walk(dt: float, f: Vector3, r: Vector3, in_f: float, in_r: float, s
 	if in_water:
 		vel.y -= 7.0 * dt
 		vel.y *= pow(0.15, dt)
-		if _key(KEY_SPACE) or (game.touch != null and game.touch.jump_held):
+		if _key(KEY_SPACE) or (game.touch != null and game.touch.jump_held) or (game.pad != null and game.pad.jump_held):
 			vel.y = minf(vel.y + 20.0 * dt, 3.2)
 	else:
 		vel.y = maxf(-45.0, vel.y - 26.0 * dt)
@@ -569,6 +619,10 @@ func animate(dt: float) -> void:
 		l_r = -s * amt
 		a_l = -s * amt * 0.9
 		a_r = s * amt * 0.9
+	if blocking and mode == "walk":
+		# Left arm up and forward, holding the shield in front.
+		a_l = -1.35
+		a_lz = 0.3
 	var k := minf(1.0, 16.0 * dt)
 	_hip_l.rotation.x += (l_l - _hip_l.rotation.x) * k
 	_hip_r.rotation.x += (l_r - _hip_r.rotation.x) * k
@@ -576,6 +630,9 @@ func animate(dt: float) -> void:
 	_sh_r.rotation.x += (a_r - _sh_r.rotation.x) * k
 	_sh_l.rotation.z += (a_lz - _sh_l.rotation.z) * k
 	_sh_r.rotation.z += (a_rz - _sh_r.rotation.z) * k
+	if shield.visible:
+		_shield_flash = maxf(0.0, _shield_flash - dt * 4.0)
+		_place_shield(minf(1.0, 18.0 * dt) if dt > 0.0 else 1.0)
 	var sw := maxf(0.0, swing_t) / 0.3
 	if sw > 0.0:
 		_sh_r.rotation.x = -1.4 - sin(sw * PI) * 1.3

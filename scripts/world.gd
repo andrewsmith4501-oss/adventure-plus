@@ -1162,9 +1162,9 @@ func _build_tables() -> void:
 
 ## Turns one of the art's block models into boxes the mesher can use:
 ## [corner a, corner b (in blocks), PackedInt32Array([top, side, bottom] layers), glows].
-func _add_model(name: String) -> int:
+func _add_model(model_name: String) -> int:
 	var boxes := []
-	for bx in Art.MODELS[name]:
+	for bx in Art.MODELS[model_name]:
 		var t = bx[6]
 		var ls := PackedInt32Array([art.lay(t[0]), art.lay(t[1]), art.lay(t[2])]) if t is Array else PackedInt32Array([art.lay(t), art.lay(t), art.lay(t)])
 		boxes.append([Vector3(bx[0], bx[1], bx[2]) / 16.0, Vector3(bx[3], bx[4], bx[5]) / 16.0, ls, bx[7]])
@@ -1288,7 +1288,7 @@ func _mesh_volume(vol: PackedByteArray, ox: int, oz: int, lf: Array = []) -> Arr
 								day = lerpf(0.24, 1.0, clampf((gap - 3) / 11.0, 0.0, 1.0))
 					# Shade underground is a little cool and blue.
 					var cool := 1.0 - day
-					var tr := 1.0 - cool * 0.12
+					var t_r := 1.0 - cool * 0.12
 					var tg := 1.0 - cool * 0.04
 					var tb := 1.0 + cool * 0.22
 					var fx := x + _face_n[f * 3 + 1]
@@ -1332,18 +1332,18 @@ func _mesh_volume(vol: PackedByteArray, ox: int, oz: int, lf: Array = []) -> Arr
 						verts.append(p)
 						var l := lits[k]
 						var w := warm[k]
-						cols.append(Color(minf(1.0, (l * tr + w) * ENC), minf(1.0, (l * tg + w * 0.74) * ENC), minf(1.0, (l * tb + w * 0.46) * ENC)))
+						cols.append(Color(minf(1.0, (l * t_r + w) * ENC), minf(1.0, (l * tg + w * 0.74) * ENC), minf(1.0, (l * tb + w * 0.46) * ENC)))
 						uvs.append(Art.face_uv(Vector3(cv), f))
 						uv2s.append(Vector2(lay, 0.0))
 					inds.append_array(PackedInt32Array([start, start + 1, start + 2, start + 2, start + 1, start + 3]))
 					# Grass tufts and flowers on open tops.
 					if plants and f == 3 and ny < H and vol[ni] == AIR and _plant_of[b] > 0 and y >= WATER:
-						_mesh_plant(b, x, y, z, (lits[0] + lits[1] + lits[2] + lits[3]) * 0.25, (warm[0] + warm[1] + warm[2] + warm[3]) * 0.25, tr, tg, tb, pv, pc, puv, puv2, pi)
+						_mesh_plant(b, x, y, z, (lits[0] + lits[1] + lits[2] + lits[3]) * 0.25, (warm[0] + warm[1] + warm[2] + warm[3]) * 0.25, t_r, tg, tb, pv, pc, puv, puv2, pi)
 	return [verts, cols, inds, uvs, uv2s, pv, pc, pi, puv, puv2]
 
 
 ## A block drawn as a small model (a lantern, a chest, a workbench...).
-func _mesh_model(mid: int, vol: PackedByteArray, bi: int, x: int, y: int, z: int, ci: int, roof: PackedInt32Array, in_room: bool, jitter: float, lf: Array, verts: PackedVector3Array, cols: PackedColorArray, uvs: PackedVector2Array, uv2s: PackedVector2Array, inds: PackedInt32Array) -> void:
+func _mesh_model(mid: int, vol: PackedByteArray, bi: int, x: int, y: int, z: int, _ci: int, roof: PackedInt32Array, in_room: bool, jitter: float, lf: Array, verts: PackedVector3Array, cols: PackedColorArray, uvs: PackedVector2Array, uv2s: PackedVector2Array, inds: PackedInt32Array) -> void:
 	const ENC := 0.64
 	var day := 1.0
 	if not in_room:
@@ -1401,7 +1401,7 @@ func _mesh_model(mid: int, vol: PackedByteArray, bi: int, x: int, y: int, z: int
 
 ## A tuft of grass, a fern, a flower or a dry bush standing on top of block b
 ## (two crossed pictures that sway). Only drawn, never in the way.
-func _mesh_plant(b: int, x: int, y: int, z: int, l: float, w: float, tr: float, tg: float, tb: float, verts: PackedVector3Array, cols: PackedColorArray, uvs: PackedVector2Array, uv2s: PackedVector2Array, inds: PackedInt32Array) -> void:
+func _mesh_plant(b: int, x: int, y: int, z: int, l: float, w: float, t_r: float, tg: float, tb: float, verts: PackedVector3Array, cols: PackedColorArray, uvs: PackedVector2Array, uv2s: PackedVector2Array, inds: PackedInt32Array) -> void:
 	var r := _hash3(x * 3 + 1, y * 5 + 2, z * 7 + 3)
 	var kind := _plant_of[b]
 	var lay := -1
@@ -1425,7 +1425,7 @@ func _mesh_plant(b: int, x: int, y: int, z: int, l: float, w: float, tr: float, 
 	var hgt := 0.55 + _hash3(x + 5, y, z + 11) * 0.35
 	var jx := (_hash3(x + 1, y, z) - 0.5) * 0.3
 	var jz := (_hash3(x, y, z + 1) - 0.5) * 0.3
-	var c := Color(minf(1.0, (l * tr + w) * ENC), minf(1.0, (l * tg + w * 0.74) * ENC), minf(1.0, (l * tb + w * 0.46) * ENC))
+	var c := Color(minf(1.0, (l * t_r + w) * ENC), minf(1.0, (l * tg + w * 0.74) * ENC), minf(1.0, (l * tb + w * 0.46) * ENC))
 	var y1 := float(y + 1)
 	for d in 2:
 		var p0 := Vector3(x + 0.15 + jx, y1, z + (0.15 if d == 0 else 0.85) + jz)
@@ -1690,9 +1690,9 @@ func _gen_chunk(k: Vector2i, want_mesh: bool) -> Dictionary:
 	bio.resize(hw * hw)
 	for hz in hw:
 		for hx in hw:
-			var c := _column(ox - m + hx, oz - m + hz)
-			hts[hx + hz * hw] = c.x
-			bio[hx + hz * hw] = c.y
+			var col := _column(ox - m + hx, oz - m + hz)
+			hts[hx + hz * hw] = col.x
+			bio[hx + hz * hw] = col.y
 	var vol := PackedByteArray()
 	vol.resize(pw * pw * H)
 	vol.fill(AIR)

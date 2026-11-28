@@ -6,7 +6,7 @@ The design lives in the project's design doc. This repository holds the game its
 
 ## Run it
 
-1. Install **Godot 4.3 or newer** (the standard build, not .NET) from https://godotengine.org/download.
+1. Install **Godot 4.7** (4.7.2 is tested; the standard build, not .NET) from https://godotengine.org/download.
 2. Open Godot, choose **Import**, and pick `project.godot` in this folder.
 3. Press **F5** (or the play button) to run.
 
@@ -40,9 +40,10 @@ The game runs on Android phones as an app. You need an APK (the Android app file
 | Sprint | Hold to sprint |
 | Hit | Hold to break a block, tap to attack |
 | Place | Place the selected block where the crosshair aims |
+| Block | Hold to raise your shield (shows up once you have one) |
 | Use | Shows up when you can talk, read, open or push. Taps also move dialogue on |
 | Hotbar slots | Tap to choose |
-| Bag, Craft, Quest, View, II | Inventory, crafting, switch quest, first or third person, pause |
+| Map, Bag, Craft, Quest, View, II | Map, inventory, crafting, switch quest, first or third person, pause |
 
 In the inventory, the **Tap** button switches what a tap does: move a stack, take half (or put down one), or quick-move between pack and hotbar.
 
@@ -60,6 +61,23 @@ The pause screen has a **Graphics** button. **High** loads 10 chunks (160 blocks
 
 From the command line: `godot --headless --export-debug Android export/AdventurePlus.apk`.
 
+## Share it with a link
+
+Friends can play without installing anything at **https://andrewsmith4501-oss.github.io/adventure-plus/**. That page has a **Play in your browser** button (PC, Mac, Android or iPhone) and a **Download for Android** button for the app, with install steps. The site is served by GitHub Pages from the `gh-pages` branch, which holds only the built game.
+
+What the web version does differently:
+
+- It is exported with the **Web** preset (in `export_presets.cfg`) without threads, so it runs on any static host, GitHub Pages included, with no special server headers.
+- In a phone's browser the game uses its phone setup (on-screen controls, phone graphics, big menus). The first tap makes the page full screen and sideways.
+- The world saves in the browser's own storage on that device.
+- In a browser, **Esc** lets go of the mouse; the game notices and pauses. Click to lock the mouse again.
+
+### Update the shared page
+
+1. Export the web build: `godot --headless --export-release Web export/web/index.html`.
+2. Build the APK (see *Build the APK*; reuse the same signing key so phones can update).
+3. On the `gh-pages` branch, replace `play/` with the contents of `export/web/` and `AdventurePlus.apk` with the new APK, then commit and push. GitHub Pages updates in a minute or two.
+
 ## Controls
 
 | Key | Action |
@@ -69,7 +87,9 @@ From the command line: `godot --headless --export-debug Android export/Adventure
 | Space | Jump. In the air: open or close the glider. On a wall: leap up |
 | Shift | Sprint. On a wall or glider: let go |
 | Left click | Hold to break a block, click to attack |
-| Right click | Place the selected block |
+| Right click | Place the selected block. With anything else in hand (a sword, nothing), hold to raise your shield |
+| X | Hold to raise your shield, whatever you hold |
+| M | Map: drag to move around, scroll to zoom, M or Esc to close |
 | 1 to 9, mouse wheel | Choose a hotbar slot |
 | F | Talk, read a tablet, use a Thread Node, open a chest, push a crate (also advances dialogue) |
 | C | Crafting (some recipes need a workbench nearby) |
@@ -77,6 +97,27 @@ From the command line: `godot --headless --export-debug Android export/Adventure
 | Q | Switch which quest is shown on screen |
 | V | Switch between third and first person |
 | Esc | Pause (music and sound volume are on the pause screen). Pausing also saves |
+
+### Controller
+
+Any Xbox, PlayStation or Switch controller works (USB or Bluetooth, on a computer or an Android phone). The game switches to the controller as soon as you press a button on it, and the help, prompts and quest hints then name its buttons (Cross/Circle/Square/Triangle on a PlayStation pad, for example). Pressing a key, moving the mouse or touching the screen switches back.
+
+| Button (Xbox / PlayStation) | Action |
+| --- | --- |
+| Left stick | Move. Click it to sprint until you stop |
+| Right stick | Look around. Click it to switch between third and first person |
+| A / Cross | Jump. In the air: open or close the glider. On a wall: leap up. Moves dialogue on |
+| B / Circle | Hold to sprint. On a wall or glider: let go. In menus: back |
+| X / Square | Talk, read, use, open a chest, push a crate |
+| Y / Triangle | Grab the wall in front of you, or let go |
+| RT / R2 | Hold to break a block, press to attack |
+| LT / L2 | Place the selected block. With anything else in hand, hold to raise your shield |
+| LB, RB / L1, R1 | Choose a hotbar slot |
+| D-pad | Up: switch quest. Down: switch camera. Left: crafting. Right: inventory |
+| View / Create | Map (sticks move it, triggers zoom, Y finds you) |
+| Menu / Options | Pause |
+
+In menus the D-pad or left stick moves between buttons and A presses. In the inventory the D-pad moves a highlight over the slots: A picks up or puts down a stack, X takes half or puts down one, Y moves a stack between the pack and the hotbar, and the bin is below the hotbar.
 
 ## What's in the game
 
@@ -102,6 +143,10 @@ From the command line: `godot --headless --export-debug Android export/Adventure
 
 **Caves and ores.** The hills and mountains of the wild lands are riddled with caves: winding tunnels that break out on hillsides and, deeper in, wide caverns. They always stay above the sea, so they are dry. Underground spaces are shaded darker the lower their roof, so caves feel like caves (the Hollow and the shrine keep their light). The stone holds ore, drawn as stone with coloured flecks: **coal** in clumps near the surface, **iron ore** a little deeper (needs a Stone Pick), and rare glowing **Sunstone** deep under hills and mountains (needs an Iron Pick). Ore is in the island's stone too. Build a **Furnace** (8 stone, at a workbench), smelt **Iron Ingots** there from iron ore and coal, then forge an **Iron Pick** (mines everything much faster), an **Iron Sword** (4 damage) and a **Sunstone Sword** (6 damage). Coal and a stick also make lanterns. New side goals: find a cave, smelt iron, forge an Iron Pick, mine Sunstone.
 
+**Map.** Press **M** (or **Map** on a phone) for a map that fills in as you explore. Everything within about 40 blocks of you is drawn from above as you go, in the colours of the ground (grass, sand, snow, stone, trees, water shaded by depth, hills with light and shadow); places you have never been stay dark. Climb or glide high and you see further (up to 70 blocks); underground you only map what is close. It marks you (an arrow pointing the way you face), the camp, your quest's next stop, and places you've found: the Windworn Hollow, the Hearthroot Shrine, Needle Rock and Wren. Drag to look around, scroll or pinch to zoom, and **Find me** jumps back to you. The explored map is saved with your world, chunk by chunk, so the endless wild lands only cost what you've seen.
+
+**Shields.** Make a **Wooden Shield** (5 planks, 1 stick) or an **Iron Shield** (3 iron ingots, 2 planks) at a workbench. A shield works from anywhere in your inventory (the best one is used) and is worn on your back. Hold **right click** (with a sword or empty hand; with a block in hand right click still places it), **X**, or **Block** on a phone to raise it: you turn to face where the camera looks and walk at half speed, and can't attack or sprint. Hits from the front are blocked: no heart lost, the Thornling bounces back, and it costs stamina instead (22 for wood, 11 for iron). Raise the shield just as a hit lands (within 0.3 seconds) for a **perfect block**: it costs nothing and stuns the Thornling for a moment, a good time to strike. Hits from the side or behind still get through, and if a block costs more stamina than you have, your guard breaks. New side goals: block a Thornling, and land a perfect block.
+
 **Compass and icons.** A compass strip at the top of the screen shows which way you face, with a white marker for camp and a gold marker for your tracked quest's next stop. In the hotbar, inventory and crafting list, blocks and block items are 3D pictures rendered from their real models (a lantern looks like a lantern, a workbench like a workbench), and tools and materials are pixel-art sprites.
 
 **How things look.** Every block has a painted 16 by 16 pixel texture: grass with a green fringe over dirt, stone with cracks, bark and tree rings, planks, bricks, thatch, ores with coloured flecks (Sunstone's glow), snowy and dry grass, Loomwright stone and more. Lanterns, chests, workbenches, spring pads, flags, the riddle tablet, cacti and the Sky Shard are drawn as small models instead of cubes (they still fill their block for walking and climbing). Whatever you hold is shown in the hero's hand as its 3D model: blocks in the palm, a lantern carried by its handle, and swords, picks and other items as thick pixel-art shapes. Breaking a block pops its item out, and it flies to you. Meadows grow grass tufts, ferns and flowers that sway in the wind (dry tufts on the Steppes, dead bushes on sand); they are only for looks and never get in your way. The sky has a soft gradient, a square sun and drifting blocky clouds, the water ripples and glints, and the hero, Bryn, Wren and the Thornlings have faces, belts, boots, gear and soft shadows under their feet.
@@ -123,7 +168,9 @@ From the command line: `godot --headless --export-debug Android export/Adventure
 | `scripts/art.gd` | How things look: paints the block textures, the block models (lanterns, chests...), item models and the terrain, item, water and sky shaders |
 | `scripts/audio.gd` | Sound effects, ambience and music with cross-fades |
 | `scripts/hud.gd` | Hearts, stamina, hotbar, quest panel, dialogue, banners, toasts and menus |
+| `scripts/map.gd` | The map: paints explored columns into per-chunk pictures, saves them, and draws the map screen |
 | `scripts/touch.gd` | On-screen controls for phones: move stick, look drag and buttons, with every finger tracked |
+| `scripts/pad.gd` | Game controller support: sticks, buttons, triggers, menus, inventory and map, and the button names for prompts |
 | `export_presets.cfg` | The Android export (signed debug APK, 64-bit ARM, landscape) |
 | `assets/audio/` | Generated sounds and music (CC0) |
 | `tools/make_audio.py` | Regenerates every sound |
@@ -131,6 +178,8 @@ From the command line: `godot --headless --export-debug Android export/Adventure
 | `tests/underground.gd` | Checks saving and loading (island and wild edits, inventory, quests, puzzles), caves, ores, smelting and New world |
 | `tests/visuals.gd` | Checks item models and icons, lantern light in a cave (and after saving and loading, and with many lanterns), and takes screenshots of the scenery and characters |
 | `tests/touch.gd` | Sends pretend finger touches: stick, look, every button, hotbar taps, inventory tap modes, phone graphics, and screenshots at a phone's shape |
+| `tests/pad.gd` | Sends pretend controller input: moving, looking, every button and trigger, the inventory, crafting, map, dialogue, pause and knocked-out screens, and the button names for Xbox, PlayStation and Switch pads |
+| `tests/map_shield.gd` | Checks the map filling in, opening and zooming, the shield recipe, blocking from the front only, perfect blocks, the guard breaking, the Map and Block buttons, and both surviving a save |
 | `tests/wild.gd` | Checks the wild lands: every biome appears, chunks stream in fast enough to glide, edits survive leaving, ruins have chests |
 | `prototype/web/index.html` | The original browser prototype, kept for reference |
 
