@@ -6,7 +6,7 @@ so the output is original and released under CC0 along with this script.
 Re-run it after changing a sound:
 
     python3 tools/make_audio.py          # needs numpy and ffmpeg (libvorbis)
-    python3 tools/make_audio.py more     # or one group: sfx, ambience, music, more
+    python3 tools/make_audio.py more     # or one group: sfx, ambience, music, more, shield
 
 Each sound is a function below. Loops (ambience, music) are rendered so the
 end wraps onto the start, which makes them loop without a click.
@@ -504,8 +504,45 @@ def more():
     write("music_shrine", sh + drone, 0.75, loop=True, quality=5)
 
 
+# ------------------------------------------------------------------ shield and map (added later)
+
+def shield():
+    """Shield and map sounds. Own random seed, like `more`."""
+    global rng
+    rng = np.random.default_rng(53)
+    print("Shield and map")
+
+    # Raising the shield: a quick leather swish and a soft knock.
+    d = 0.22
+    swish = fft_filter(noise(d), 500, 3500) * np.sin(np.linspace(0, np.pi, int(d * SR))) ** 2
+    write("shield_up", 0.6 * swish + 0.5 * drum(d, 180, 120, 0.05) * env(int(d * SR), 0.06, 0.05), 0.5)
+
+    # A blocked hit: a heavy wooden thunk with a short rattle.
+    d = 0.4
+    thunk = drum(d, 150, 70, 0.35) + 0.6 * fft_filter(noise(d), 200, 1800) * env(int(d * SR), 0.001, 0.04)
+    rattle = fft_filter(noise(d), 1500, 5000) * env(int(d * SR), 0.002, 0.08) * 0.3
+    write("shield_block", thunk + rattle, 0.85)
+
+    # A perfect block: the thunk plus a bright ring that hangs in the air.
+    d = 1.1
+    buf = np.zeros(int(d * SR))
+    place(buf, drum(0.35, 170, 80, 0.3), 0.0)
+    for f, a in ((1320, 0.35), (1980, 0.25), (2640, 0.18), (3520, 0.1)):
+        place(buf, bell(f, 0.9) * a, 0.0)
+    write("shield_parry", reverb(buf, 0.9, 0.2), 0.8)
+
+    # Opening the map: paper unfolding.
+    d = 0.45
+    buf = np.zeros(int(d * SR))
+    for g in range(7):
+        gd = 0.07
+        x = fft_filter(noise(gd), 1200, 7000) * env(int(gd * SR), 0.004, 0.03)
+        place(buf, x * rng.uniform(0.4, 1.0), g * 0.045 + rng.uniform(0, 0.02))
+    write("map_open", buf * env(len(buf), 0.01, 0.2), 0.5)
+
+
 if __name__ == "__main__":
     only = sys.argv[1:]
-    for name, fn in (("sfx", sfx), ("ambience", ambience), ("music", music), ("more", more)):
+    for name, fn in (("sfx", sfx), ("ambience", ambience), ("music", music), ("more", more), ("shield", shield)):
         if not only or name in only:
             fn()

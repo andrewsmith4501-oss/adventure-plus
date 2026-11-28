@@ -2,6 +2,11 @@ extends CanvasLayer
 ## Everything drawn on top of the 3D view: hearts, stamina ring, hotbar,
 ## goals, toasts and the start, crafting and knocked-out screens.
 
+const INV_HELP := "Click to pick up a stack and click again to put it down. Right-click takes half, or puts down one. Shift-click moves a stack between your pack and the hotbar. Drop a stack on the bin to throw it away."
+const MAP_HELP := "Drag to look around, scroll to zoom. M or Esc closes the map."
+const MAP_HELP_TOUCH := "Drag to look around, pinch or use + and - to zoom."
+const INV_HELP_TOUCH := "Tap a stack to pick it up and tap again to put it down. The Tap button switches to taking half (or putting down one), or to quick-moving stacks between your pack and the hotbar. Drop a stack on the bin to throw it away."
+
 signal play_pressed
 signal new_world_pressed
 signal craft_closed
@@ -11,8 +16,11 @@ signal respawn_pressed
 signal craft_requested(index: int)
 signal music_volume_changed(value: float)
 signal sound_volume_changed(value: float)
+signal graphics_toggled
+signal map_closed
 
 const Art = preload("res://scripts/art.gd")
+const MapData = preload("res://scripts/map.gd")
 const ACCENT := Color("f2b84b")
 const INK := Color("f4efe3")
 const INK_DIM := Color("c9c2b0")
@@ -178,6 +186,30 @@ var start_title: Label
 var play_button: Button
 var new_world_button: Button
 var save_label: Label
+var graphics_button: Button
+var keys_grid: GridContainer
+var touch_grid: GridContainer
+var dialog_hint: Label
+var inv_help: Label
+var tap_button: Button
+var map_view: MapData.View
+var map_info: Label
+var map_hint: Label
+## Phone inventory: what a tap does (0 move a stack, 1 take half or put one,
+## 2 quick move between pack and hotbar).
+var tap_mode := 0
+var touch_mode := false
+## True while a game controller is in use: prompts name its buttons.
+var pad_mode := false
+var pad  # pad.gd, for the names of the controller's buttons
+var pad_grid: GridContainer
+## The inventory slot picked with the controller (-1 is the bin).
+var pad_slot := 0
+var respawn_button: Button
+var craft_close: Button
+var _craft_buttons: Array = []
+var _inv_panels := {}
+var _prompt_raw := ""
 var _has_save := false
 var screens := {}
 var audio  # audio.gd, for button clicks
@@ -291,6 +323,7 @@ func _ready() -> void:
 	var cont := _label("F or click to continue", 12, INK_DIM)
 	cont.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	dbox.add_child(cont)
+	dialog_hint = cont
 	dialog_panel.visible = false
 	root.add_child(dialog_panel)
 
@@ -305,6 +338,7 @@ func _ready() -> void:
 	_build_craft_screen()
 	_build_inventory_screen()
 	_build_dead_screen()
+	_build_map_screen()
 
 
 # ---------------------------------------------------------------- helpers
@@ -334,12 +368,12 @@ func _style(bg: Color, radius: int, pad_v: int, pad_h: int, border := Color.TRAN
 	return sb
 
 
-func _label(text: String, font_size := 16, color := INK, wrap := false) -> Label:
+func _label(text: String, font_size := 16, color := INK, wrap_text := false) -> Label:
 	var l := Label.new()
 	l.text = text
 	l.add_theme_font_size_override("font_size", font_size)
 	l.add_theme_color_override("font_color", color)
-	if wrap:
+	if wrap_text:
 		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	return l
 
@@ -394,9 +428,12 @@ func _make_screen(key: String, title: String, body: String) -> VBoxContainer:
 
 func _build_start_screen() -> void:
 	var box := _make_screen("start", "Adventure Plus", "Gather and build in the meadows of Hearthvale, help the villagers, solve the Loomwright shrine and climb into the windswept Gale Steppes, where something stirs inside the great mesa. Talk to Bryn at the camp to begin.")
+	# Two keys per row, so the Play button fits on short screens (and in a
+	# web browser window).
 	var grid := GridContainer.new()
-	grid.columns = 2
+	grid.columns = 4
 	grid.add_theme_constant_override("h_separation", 14)
+	grid.add_theme_constant_override("v_separation", 6)
 	var keys := [
 		["Mouse", "Look around"],
 		["W A S D", "Move. Walk into a tall wall to climb it"],
@@ -409,15 +446,47 @@ func _build_start_screen() -> void:
 		["Q", "Switch the quest shown on screen"],
 		["C", "Open crafting"],
 		["E or I", "Open your inventory"],
+		["M", "Open the map. It fills in as you explore"],
+		["Right click, X", "Hold to raise your shield (when you have one and aren't holding a block)"],
 		["V", "Switch between third and first person"],
 		["Esc", "Pause"],
 	]
 	for k in keys:
 		grid.add_child(_label(k[0], 15, ACCENT))
 		var desc := _label(k[1], 15, INK, true)
-		desc.custom_minimum_size = Vector2(360, 0)
+		desc.custom_minimum_size = Vector2(250, 0)
 		grid.add_child(desc)
 	box.add_child(grid)
+	keys_grid = grid
+	# The same, for the on-screen controls on a phone.
+	touch_grid = GridContainer.new()
+	touch_grid.columns = 2
+	touch_grid.add_theme_constant_override("h_separation", 14)
+	var taps := [
+		["Left thumb", "Move. Walk into a tall wall to climb it"],
+		["Drag right side", "Look around"],
+		["Jump", "Jump. On a wall: leap up. Hold in water to swim up"],
+		["Glide / Climb", "Open the glider in the air. Grab a wall, or let go"],
+		["Hit", "Hold to break a block, tap to attack"],
+		["Block", "Hold to raise your shield (once you have one)"],
+		["Place", "Place the selected block where you aim"],
+		["Use", "Talk, read, open, push (shows up when you can)"],
+		["Hotbar", "Tap a slot to choose it"],
+		["Map, Bag, Craft, Quest, View, II", "Map, inventory, crafting, switch quest, camera, pause"],
+	]
+	for k in taps:
+		touch_grid.add_child(_label(k[0], 15, ACCENT))
+		var desc := _label(k[1], 15, INK, true)
+		desc.custom_minimum_size = Vector2(380, 0)
+		touch_grid.add_child(desc)
+	touch_grid.visible = false
+	box.add_child(touch_grid)
+	# And for a game controller (filled in with its button names when one is used).
+	pad_grid = GridContainer.new()
+	pad_grid.columns = 2
+	pad_grid.add_theme_constant_override("h_separation", 14)
+	pad_grid.visible = false
+	box.add_child(pad_grid)
 	var vol := GridContainer.new()
 	vol.columns = 2
 	vol.add_theme_constant_override("h_separation", 14)
@@ -429,6 +498,15 @@ func _build_start_screen() -> void:
 	vol.add_child(music_slider)
 	vol.add_child(_label("Sound", 15, ACCENT))
 	vol.add_child(sound_slider)
+	vol.add_child(_label("Graphics", 15, ACCENT))
+	graphics_button = _button("High")
+	graphics_button.pressed.connect(func() -> void: graphics_toggled.emit())
+	for st in ["normal", "hover", "pressed"]:
+		var bg := Color("3a423c") if st == "normal" else (Color("4a544d") if st == "hover" else Color("2f3631"))
+		graphics_button.add_theme_stylebox_override(st, _style(bg, 8, 8, 14))
+	for st in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		graphics_button.add_theme_color_override(st, INK)
+	vol.add_child(graphics_button)
 	box.add_child(vol)
 	save_label = _label("", 14, INK_DIM, true)
 	save_label.visible = false
@@ -451,6 +529,115 @@ func _build_start_screen() -> void:
 	row.add_child(new_world_button)
 
 
+func set_graphics_label(phone: bool) -> void:
+	graphics_button.text = "Phone (faster: shorter view, fewer effects)" if phone else "High (full view distance and effects)"
+
+
+## Shows the phone controls' help instead of the keyboard's, and lets taps
+## in the inventory do what right-click and shift-click do.
+func set_touch_mode(on: bool) -> void:
+	touch_mode = on
+	_apply_mode()
+
+
+## Shows a game controller's buttons in the help and prompts (or not).
+func set_pad_mode(on: bool) -> void:
+	pad_mode = on
+	if on:
+		_fill_pad_grid()
+	_apply_mode()
+	if on:
+		for k in screens:
+			if screens[k].visible:
+				focus_screen(k)
+
+
+func _apply_mode() -> void:
+	var p := pad_mode
+	keys_grid.visible = not touch_mode and not p
+	touch_grid.visible = touch_mode and not p
+	pad_grid.visible = p
+	tap_button.visible = touch_mode and not p
+	if p:
+		dialog_hint.text = "%s to continue" % prompt_key("jump")
+		map_hint.text = "Sticks look around, %s and %s zoom, %s finds you. %s goes back." % [pad.label("lt"), pad.label("rt"), pad.label(JOY_BUTTON_Y), pad.label(JOY_BUTTON_B)]
+		inv_help.text = "Move with the %s or left stick. %s picks up or puts down a stack, %s takes half or puts down one, %s moves a stack between your pack and the hotbar. The bin is below the hotbar. %s goes back." % [pad.label("dpad"), pad.label(JOY_BUTTON_A), pad.label(JOY_BUTTON_X), pad.label(JOY_BUTTON_Y), pad.label(JOY_BUTTON_B)]
+	else:
+		dialog_hint.text = "Tap to continue" if touch_mode else "F or click to continue"
+		map_hint.text = MAP_HELP_TOUCH if touch_mode else MAP_HELP
+		inv_help.text = INV_HELP_TOUCH if touch_mode else INV_HELP
+	set_prompt(_prompt_raw)
+	if screens.has("inv") and screens["inv"].visible:
+		refresh_pad_slot()
+
+
+## What to press for an action with the input in use (keys, touch or pad),
+## for prompts like "Press Space in mid-air to glide".
+func prompt_key(action: String) -> String:
+	if pad_mode and pad != null:
+		var b = {"use": JOY_BUTTON_X, "jump": JOY_BUTTON_A, "craft": JOY_BUTTON_DPAD_LEFT,
+			"inv": JOY_BUTTON_DPAD_RIGHT, "map": JOY_BUTTON_BACK, "quest": JOY_BUTTON_DPAD_UP,
+			"pause": JOY_BUTTON_START, "block": "lt", "view": JOY_BUTTON_DPAD_DOWN,
+			"climb": JOY_BUTTON_Y, "sprint": JOY_BUTTON_B}.get(action, action)
+		return pad.label(b)
+	if touch_mode:
+		return {"use": "Use", "jump": "Jump", "craft": "Craft", "inv": "Bag", "map": "Map",
+			"quest": "Quest", "pause": "II", "block": "Block", "view": "View",
+			"climb": "Climb", "sprint": "Sprint"}.get(action, action)
+	return {"use": "F", "jump": "Space", "craft": "C", "inv": "E", "map": "M", "quest": "Q",
+		"pause": "Esc", "block": "X", "view": "V", "climb": "W", "sprint": "Shift"}.get(action, action)
+
+
+func _fill_pad_grid() -> void:
+	for c in pad_grid.get_children():
+		c.queue_free()
+	var rows := [
+		[pad.label("lstick"), "Move (click to sprint). Walk into a tall wall to climb"],
+		[pad.label("rstick"), "Look around (click to switch camera)"],
+		[pad.label(JOY_BUTTON_A), "Jump. In the air: glider. On a wall: leap up"],
+		[pad.label(JOY_BUTTON_B), "Hold to sprint. On a wall or glider: let go"],
+		[pad.label("rt"), "Hold to break a block, press to attack"],
+		[pad.label("lt"), "Place the selected block, or hold to raise your shield"],
+		[pad.label(JOY_BUTTON_X), "Talk, read, use, open, push a crate"],
+		[pad.label(JOY_BUTTON_Y), "Grab the wall in front of you, or let go"],
+		[pad.label(JOY_BUTTON_LEFT_SHOULDER) + " / " + pad.label(JOY_BUTTON_RIGHT_SHOULDER), "Choose a hotbar slot"],
+		[pad.label("dpad"), "Up quest, down camera, left crafting, right inventory"],
+		[pad.label(JOY_BUTTON_BACK), "Open the map"],
+		[pad.label(JOY_BUTTON_START), "Pause"],
+	]
+	for k in rows:
+		pad_grid.add_child(_label(k[0], 15, ACCENT))
+		var desc := _label(k[1], 15, INK, true)
+		desc.custom_minimum_size = Vector2(420, 0)
+		pad_grid.add_child(desc)
+
+
+## Gives the controller something to start from on a screen.
+func focus_screen(key_: String) -> void:
+	match key_:
+		"start":
+			play_button.grab_focus()
+		"dead":
+			respawn_button.grab_focus()
+		"craft":
+			var first: Button = craft_close
+			for b in _craft_buttons:
+				if not b.disabled:
+					first = b
+					break
+			first.grab_focus()
+		"inv":
+			get_viewport().gui_release_focus()
+			refresh_pad_slot()
+		"map":
+			get_viewport().gui_release_focus()
+
+
+func _cycle_tap_mode() -> void:
+	tap_mode = (tap_mode + 1) % 3
+	tap_button.text = ["Tap: move a stack", "Tap: take half / put one", "Tap: quick move"][tap_mode]
+
+
 func _slider(value: float) -> HSlider:
 	var s := HSlider.new()
 	s.min_value = 0.0
@@ -458,7 +645,8 @@ func _slider(value: float) -> HSlider:
 	s.step = 0.05
 	s.value = value
 	s.custom_minimum_size = Vector2(240, 24)
-	s.focus_mode = Control.FOCUS_NONE
+	# Focusable, so a controller can set it with left and right.
+	s.focus_mode = Control.FOCUS_ALL
 	return s
 
 
@@ -467,6 +655,7 @@ func _build_craft_screen() -> void:
 	var scroll := ScrollContainer.new()
 	scroll.custom_minimum_size = Vector2(500, 430)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.follow_focus = true
 	box.add_child(scroll)
 	recipes_box = VBoxContainer.new()
 	recipes_box.add_theme_constant_override("separation", 8)
@@ -475,10 +664,13 @@ func _build_craft_screen() -> void:
 	var close := _button("Back to the world")
 	close.pressed.connect(func() -> void: craft_closed.emit())
 	box.add_child(close)
+	craft_close = close
 
 
 func _build_inventory_screen() -> void:
-	var box := _make_screen("inv", "Inventory", "Click to pick up a stack and click again to put it down. Right-click takes half, or puts down one. Shift-click moves a stack between your pack and the hotbar. Drop a stack on the bin to throw it away.")
+	var box := _make_screen("inv", "Inventory", "")
+	inv_help = _label(INV_HELP, 16, INK_DIM, true)
+	box.add_child(inv_help)
 	box.add_child(_label("PACK", 12, ACCENT))
 	pack_grid = GridContainer.new()
 	pack_grid.columns = 9
@@ -504,6 +696,11 @@ func _build_inventory_screen() -> void:
 	close.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	close.pressed.connect(func() -> void: inv_closed.emit())
 	row.add_child(close)
+	tap_button = _button("Tap: move a stack")
+	tap_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	tap_button.pressed.connect(_cycle_tap_mode)
+	tap_button.visible = false
+	row.add_child(tap_button)
 	box.add_child(row)
 	cursor_icon = Control.new()
 	cursor_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -515,7 +712,10 @@ func _build_inventory_screen() -> void:
 func _slot_input(ev: InputEvent, index: int) -> void:
 	if ev is InputEventMouseButton and ev.pressed:
 		var mb := ev as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_LEFT or mb.button_index == MOUSE_BUTTON_RIGHT:
+		if mb.button_index == MOUSE_BUTTON_LEFT and touch_mode and mb.device == InputEvent.DEVICE_ID_EMULATION:
+			inv_clicked.emit(index, MOUSE_BUTTON_RIGHT if tap_mode == 1 else MOUSE_BUTTON_LEFT, tap_mode == 2)
+			get_viewport().set_input_as_handled()
+		elif mb.button_index == MOUSE_BUTTON_LEFT or mb.button_index == MOUSE_BUTTON_RIGHT:
 			inv_clicked.emit(index, mb.button_index, mb.shift_pressed)
 			get_viewport().set_input_as_handled()
 
@@ -560,6 +760,7 @@ func render_inventory(slots: Array, cursor, items: Dictionary) -> void:
 		c.queue_free()
 	for i in slots.size():
 		var p := _slot_panel(slots[i], items, EDGE, str(i + 1) if i < 9 else "")
+		_inv_panels[i] = p
 		var idx := i
 		p.gui_input.connect(func(ev: InputEvent) -> void: _slot_input(ev, idx))
 		if i < 9:
@@ -571,6 +772,72 @@ func render_inventory(slots: Array, cursor, items: Dictionary) -> void:
 	cursor_icon.visible = cursor != null
 	if cursor != null:
 		_add_stack(cursor_icon, cursor, items)
+	_inv_panels[-1] = bin_slot
+	refresh_pad_slot()
+
+
+## Outlines the slot the controller has picked (only while one is in use).
+func refresh_pad_slot() -> void:
+	for i in _inv_panels:
+		var p: Panel = _inv_panels[i]
+		if not is_instance_valid(p) or p.is_queued_for_deletion():
+			continue
+		var on: bool = pad_mode and i == pad_slot
+		if i == -1:
+			p.add_theme_stylebox_override("panel", _style(Color(0.35, 0.12, 0.1, 0.85), 8, 0, 0, Color.WHITE if on else DANGER, 3 if on else 2))
+		else:
+			p.add_theme_stylebox_override("panel", _style(PANEL, 8, 0, 0, Color.WHITE if on else EDGE, 3 if on else 2))
+
+
+## The map: nearly the whole screen, with zoom buttons and a way back.
+func _build_map_screen() -> void:
+	var dim := ColorRect.new()
+	dim.color = Color(0.04, 0.055, 0.047, 0.75)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	root.add_child(dim)
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", _style(Color("18201b"), 12, 14, 16, EDGE, 1))
+	_place(panel, 0, 0, 1, 1, 28, 22, -28, -22)
+	dim.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	panel.add_child(box)
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 14)
+	box.add_child(head)
+	head.add_child(_label("Map", 26))
+	map_info = _label("", 15, ACCENT)
+	map_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	map_info.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	head.add_child(map_info)
+	map_view = MapData.View.new()
+	map_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	map_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(map_view)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	box.add_child(row)
+	var zin := _button("+")
+	zin.custom_minimum_size = Vector2(52, 0)
+	zin.pressed.connect(func() -> void: map_view.zoom_by(1.5))
+	row.add_child(zin)
+	var zout := _button("-")
+	zout.custom_minimum_size = Vector2(52, 0)
+	zout.pressed.connect(func() -> void: map_view.zoom_by(1.0 / 1.5))
+	row.add_child(zout)
+	var me := _button("Find me")
+	me.pressed.connect(func() -> void: map_view.recenter())
+	row.add_child(me)
+	map_hint = _label(MAP_HELP, 14, INK_DIM, true)
+	map_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	map_hint.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(map_hint)
+	var close := _button("Back to the world")
+	close.pressed.connect(func() -> void: map_closed.emit())
+	row.add_child(close)
+	screens["map"] = dim
+	dim.visible = false
 
 
 func _build_dead_screen() -> void:
@@ -578,6 +845,7 @@ func _build_dead_screen() -> void:
 	var b := _button("Get up")
 	b.pressed.connect(func() -> void: respawn_pressed.emit())
 	box.add_child(b)
+	respawn_button = b
 
 
 # ---------------------------------------------------------------- API
@@ -587,6 +855,8 @@ func show_screen(key: String) -> void:
 		screens[k].visible = (k == key)
 	if key == "start":
 		play_button.grab_focus()
+	elif pad_mode and key != "":
+		focus_screen(key)
 
 
 func set_paused_title(paused: bool) -> void:
@@ -695,7 +965,15 @@ func set_compass(heading: float, markers: Array) -> void:
 
 
 func set_prompt(text: String) -> void:
-	prompt_label.text = text
+	_prompt_raw = text
+	if pad_mode and text.begins_with("F  "):
+		# Name the controller's button instead of F.
+		prompt_label.text = prompt_key("use") + "  " + text.trim_prefix("F  ")
+	elif touch_mode:
+		# On a phone the Use button does what F does.
+		prompt_label.text = text.trim_prefix("F  ")
+	else:
+		prompt_label.text = text
 
 
 func show_dialog(speaker: String, text: String) -> void:
@@ -731,6 +1009,13 @@ func render_hotbar(slots: Array, sel: int, items: Dictionary) -> void:
 
 ## rows: [{"name", "need" (BBCode), "ok", "color"}]
 func render_recipes(rows: Array) -> void:
+	# Keep the controller on the same recipe after crafting.
+	var focus_i := -1
+	var f := get_viewport().gui_get_focus_owner()
+	for i in _craft_buttons.size():
+		if _craft_buttons[i] == f:
+			focus_i = i
+	_craft_buttons.clear()
 	for c in recipes_box.get_children():
 		c.queue_free()
 	for i in rows.size():
@@ -760,11 +1045,18 @@ func render_recipes(rows: Array) -> void:
 		b.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		hb.add_child(b)
 		recipes_box.add_child(hb)
+		_craft_buttons.append(b)
+	if focus_i >= 0 and focus_i < _craft_buttons.size():
+		_craft_buttons[focus_i].grab_focus()
 
 
 func _process(delta: float) -> void:
 	if cursor_icon.visible:
-		cursor_icon.position = get_viewport().get_mouse_position() - Vector2(26, 26)
+		var at: Panel = _inv_panels.get(pad_slot) if pad_mode else null
+		if at != null and is_instance_valid(at):
+			cursor_icon.global_position = at.global_position + Vector2(16, -20)
+		else:
+			cursor_icon.position = get_viewport().get_mouse_position() - Vector2(26, 26)
 	if _name_timer > 0.0:
 		_name_timer -= delta
 		if _name_timer <= 0.0:

@@ -179,7 +179,7 @@ func update(dt: float, world: World, player, game) -> void:
 
 	var dy := ppos.y - pos.y
 	if attack_cd <= 0.0 and dist < 0.85 and dy > -1.7 and dy < 0.85:
-		game.hurt_player(1, pos)
+		game.hurt_player(1, pos, self)
 		attack_cd = 1.0
 
 	position = pos
