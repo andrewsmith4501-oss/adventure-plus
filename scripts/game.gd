@@ -11,6 +11,7 @@ const Hud = preload("res://scripts/hud.gd")
 const Audio = preload("res://scripts/audio.gd")
 const Npc = preload("res://scripts/npc.gd")
 const TouchControls = preload("res://scripts/touch.gd")
+const GamepadControls = preload("res://scripts/pad.gd")
 const Art = preload("res://scripts/art.gd")
 const MapData = preload("res://scripts/map.gd")
 
@@ -195,6 +196,8 @@ var player: Player
 var hud: Hud
 ## On-screen controls for phones (hidden on a computer until you touch the screen).
 var touch: TouchControls
+## Game controller support (takes over as soon as a pad is used).
+var pad: GamepadControls
 ## "high" or "phone": how far the world loads and how many effects are drawn.
 var graphics := "high"
 var audio: Audio
@@ -361,9 +364,14 @@ func _ready() -> void:
 	touch = TouchControls.new()
 	touch.game = self
 	add_child(touch)
-	if OS.has_feature("mobile"):
+	pad = GamepadControls.new()
+	pad.game = self
+	hud.pad = pad
+	add_child(pad)
+	if TouchControls.is_phone() or OS.has_feature("web"):
 		# Phones have small, very sharp screens: draw the menus and buttons
-		# at a fixed size in UI units so they are big enough to touch.
+		# at a fixed size in UI units so they are big enough to touch. A
+		# web browser window can be any size, so it does the same.
 		var win := get_tree().root
 		win.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
 		win.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
@@ -897,7 +905,7 @@ func _craft(i: int) -> void:
 	audio.play("craft", -3.0)
 	if r["out"] == "glider":
 		complete("glider")
-		toast("Press Space in mid-air to glide")
+		toast("Press %s in mid-air to glide" % hud.prompt_key("jump"))
 	elif r["out"] == "iron" or r["out"] == "ipick":
 		complete(r["out"])
 	hud.render_recipes(_recipe_rows())
@@ -914,7 +922,7 @@ func _render_quest() -> void:
 	var q: Dictionary = quests[tracked]
 	var steps := []
 	for g in q["steps"]:
-		steps.append({"text": g["text"], "done": done.has(g["id"])})
+		steps.append({"text": str(g["text"]).replace("(C)", "(%s)" % hud.prompt_key("craft")), "done": done.has(g["id"])})
 	var extra := []
 	for g in side:
 		if g.has("needs") and not done.has(g["needs"]):
@@ -927,7 +935,7 @@ func _render_quest() -> void:
 	for i in quests.size():
 		if i != tracked and not quest_done(quests[i]):
 			others += 1
-	var footer := "Q  Switch quest (%d more)" % others if others > 0 else ""
+	var footer := "%s  Switch quest (%d more)" % [hud.prompt_key("quest"), others] if others > 0 else ""
 	hud.set_quest(q["title"], steps, extra, footer)
 
 
@@ -989,7 +997,7 @@ func _say(speaker: String, lines: Array, on_done := Callable()) -> void:
 
 
 func _show_line() -> void:
-	hud.show_dialog(_dialog_speaker, _dialog[_dialog_i])
+	hud.show_dialog(_dialog_speaker, str(_dialog[_dialog_i]).replace("Press C to craft", "Press %s to craft" % hud.prompt_key("craft")))
 	audio.play("talk%d" % (1 + _dialog_i % 3), -6.0, 0.05)
 
 
@@ -1245,14 +1253,15 @@ func _resume() -> void:
 	_return_cursor()
 	hud.show_screen("")
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_web_locked = false
 	running = true
 	_new_world_armed = false
 	if not started:
 		started = true
 		if loaded_save:
 			var r: String = world.region_at(player.pos + Vector3(0, 0.5, 0))
-			var name: String = REGIONS.get(r, ["Adventure Plus"])[0]
-			hud.show_banner("Welcome back", name)
+			var region_name: String = REGIONS.get(r, ["Adventure Plus"])[0]
+			hud.show_banner("Welcome back", region_name)
 		else:
 			hud.show_banner("Hearthvale", REGIONS["hearthvale"][1])
 			_seen_regions["hearthvale"] = true
@@ -1286,6 +1295,7 @@ func _toggle_inventory() -> void:
 		running = false
 		mouse_down = false
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		hud.pad_slot = pad.inv_slot if pad != null else sel
 		hud.render_inventory(slots, cursor, items)
 		hud.show_screen("inv")
 
@@ -1383,6 +1393,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
 				_advance_dialog()
 			return
+		if OS.has_feature("web") and mb.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED and not touch.enabled:
+			# The browser did not lock the mouse yet: this click does it.
+			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+			return
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			mouse_down = mb.pressed
 			if mb.pressed:
@@ -1449,7 +1463,7 @@ func toggle_view() -> void:
 	toast("First person" if player.first_person else "Third person")
 
 
-# Used by the on-screen controls (touch.gd).
+# Used by the on-screen controls (touch.gd) and the controller (pad.gd).
 func place_block() -> void:
 	_place_block()
 
@@ -1460,6 +1474,28 @@ func interact() -> void:
 
 func advance_dialog() -> void:
 	_advance_dialog()
+
+
+func skip_dialog() -> void:
+	_dialog = []
+	hud.hide_dialog()
+
+
+func inv_click(i: int, button: int, shift: bool) -> void:
+	_inv_click(i, button, shift)
+
+
+## Closes the crafting, inventory or map screen and goes back to the world.
+func close_menu() -> void:
+	if hud.screens["craft"].visible or hud.screens["inv"].visible or hud.screens["map"].visible:
+		_resume()
+
+
+## Re-renders text that names keys or buttons, after the input in use changes.
+func refresh_prompts() -> void:
+	_render_quest()
+	if talking():
+		hud.show_dialog(_dialog_speaker, str(_dialog[_dialog_i]).replace("Press C to craft", "Press %s to craft" % hud.prompt_key("craft")))
 
 
 func pause() -> void:
@@ -1519,7 +1555,7 @@ func set_graphics(level: String) -> void:
 
 func _load_settings() -> void:
 	var cf := ConfigFile.new()
-	var level := "phone" if OS.has_feature("mobile") else "high"
+	var level := "phone" if TouchControls.is_phone() else "high"
 	if save_path != "" and cf.load(_settings_path()) == OK:
 		level = cf.get_value("video", "graphics", level)
 	set_graphics(level)
@@ -1606,6 +1642,7 @@ func _process(delta: float) -> void:
 		_update_bridge(dt)
 		var it := _interaction()
 		hud.set_prompt(it.get("text", ""))
+		_check_web_mouse()
 	else:
 		player.wind = Vector3.ZERO
 		player.animate(0.0)
@@ -1739,8 +1776,8 @@ func _update_map_view(recenter := false) -> void:
 	if recenter or v.follow:
 		v.center = v.you
 	var r: String = world.region_at(player.pos + Vector3(0, 0.5, 0))
-	var name: String = REGIONS.get(r, [r.capitalize()])[0]
-	hud.map_info.text = "%s    x %d, z %d" % [name, floori(player.pos.x), floori(player.pos.z)]
+	var region_name: String = REGIONS.get(r, [r.capitalize()])[0]
+	hud.map_info.text = "%s    x %d, z %d" % [region_name, floori(player.pos.x), floori(player.pos.z)]
 	v.queue_redraw()
 
 
@@ -2320,11 +2357,32 @@ func _update_interaction(dt: float) -> void:
 	_crack.visible = breaking
 
 
+## In a web browser, pressing Escape lets go of the mouse without the game
+## hearing the key. When that happens, pause like Escape does.
+var _web_locked := false
+
+func _check_web_mouse() -> void:
+	if not OS.has_feature("web"):
+		return
+	if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		_web_locked = true
+	elif _web_locked:
+		_web_locked = false
+		if running and not player.dead:
+			_pause()
+
+
 # ---------------------------------------------------------------- saving
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		save_game()
+	elif what == NOTIFICATION_APPLICATION_FOCUS_OUT and OS.has_feature("web"):
+		# A browser tab was switched or closed: keep the world safe.
+		if running and not talking():
+			_pause()
+		else:
+			save_game()
 	elif what == NOTIFICATION_APPLICATION_PAUSED:
 		# A phone switched to another app (it may close this one later).
 		if running and not talking():
@@ -2332,7 +2390,11 @@ func _notification(what: int) -> void:
 		else:
 			save_game()
 	elif what == NOTIFICATION_WM_GO_BACK_REQUEST:
-		# Android's back gesture: close a menu or dialogue, or pause.
+		# Android's back gesture: close a menu or dialogue, or pause. Some
+		# Bluetooth pads also send "back" with their B button; that button
+		# already does its own thing, so ignore the extra back.
+		if pad != null and Time.get_ticks_msec() - pad.last_button_ms < 300:
+			return
 		if running and talking():
 			_dialog = []
 			hud.hide_dialog()
@@ -2358,7 +2420,10 @@ func save_data() -> Dictionary:
 			wren_at.y = world.surface_y(wren_at.x, wren_at.z)
 	var packed := []
 	for s in slots:
-		packed.append(null if s == null else {"id": s["id"], "n": int(s["n"])})
+		if s == null:
+			packed.append(null)
+		else:
+			packed.append({"id": s["id"], "n": int(s["n"])})
 	var cur = cursor
 	if cur != null:
 		# A stack held on the mouse goes back into the pack.
@@ -2401,13 +2466,25 @@ func save_game() -> bool:
 	_autosave_t = AUTOSAVE_EVERY
 	if save_path == "":
 		return false
-	var tmp := save_path + ".tmp"
+	# In a web browser files are kept in the browser's storage, which is
+	# only updated when a file is closed (a rename is not stored), so write
+	# the save in place there.
+	var web := OS.has_feature("web")
+	var tmp := save_path if web else save_path + ".tmp"
 	var f := FileAccess.open_compressed(tmp, FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
 	if f == null:
 		push_warning("Could not save the world: %s" % error_string(FileAccess.get_open_error()))
 		return false
 	f.store_var(save_data())
 	f.close()
+	if web:
+		# A compressed file does not tell the browser to store it when it
+		# closes; closing a plain file does, and stores the whole folder.
+		var mark := FileAccess.open(save_path.get_base_dir().path_join("saved.txt"), FileAccess.WRITE)
+		if mark != null:
+			mark.store_string(Time.get_datetime_string_from_system())
+			mark.close()
+		return true
 	var dir := DirAccess.open(save_path.get_base_dir())
 	if dir == null:
 		return false

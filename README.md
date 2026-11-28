@@ -6,7 +6,7 @@ The design lives in the project's design doc. This repository holds the game its
 
 ## Run it
 
-1. Install **Godot 4.3 or newer** (the standard build, not .NET) from https://godotengine.org/download.
+1. Install **Godot 4.7** (4.7.2 is tested; the standard build, not .NET) from https://godotengine.org/download.
 2. Open Godot, choose **Import**, and pick `project.godot` in this folder.
 3. Press **F5** (or the play button) to run.
 
@@ -61,6 +61,23 @@ The pause screen has a **Graphics** button. **High** loads 10 chunks (160 blocks
 
 From the command line: `godot --headless --export-debug Android export/AdventurePlus.apk`.
 
+## Share it with a link
+
+Friends can play without installing anything at **https://andrewsmith4501-oss.github.io/adventure-plus/**. That page has a **Play in your browser** button (PC, Mac, Android or iPhone) and a **Download for Android** button for the app, with install steps. The site is served by GitHub Pages from the `gh-pages` branch, which holds only the built game.
+
+What the web version does differently:
+
+- It is exported with the **Web** preset (in `export_presets.cfg`) without threads, so it runs on any static host, GitHub Pages included, with no special server headers.
+- In a phone's browser the game uses its phone setup (on-screen controls, phone graphics, big menus). The first tap makes the page full screen and sideways.
+- The world saves in the browser's own storage on that device.
+- In a browser, **Esc** lets go of the mouse; the game notices and pauses. Click to lock the mouse again.
+
+### Update the shared page
+
+1. Export the web build: `godot --headless --export-release Web export/web/index.html`.
+2. Build the APK (see *Build the APK*; reuse the same signing key so phones can update).
+3. On the `gh-pages` branch, replace `play/` with the contents of `export/web/` and `AdventurePlus.apk` with the new APK, then commit and push. GitHub Pages updates in a minute or two.
+
 ## Controls
 
 | Key | Action |
@@ -80,6 +97,27 @@ From the command line: `godot --headless --export-debug Android export/Adventure
 | Q | Switch which quest is shown on screen |
 | V | Switch between third and first person |
 | Esc | Pause (music and sound volume are on the pause screen). Pausing also saves |
+
+### Controller
+
+Any Xbox, PlayStation or Switch controller works (USB or Bluetooth, on a computer or an Android phone). The game switches to the controller as soon as you press a button on it, and the help, prompts and quest hints then name its buttons (Cross/Circle/Square/Triangle on a PlayStation pad, for example). Pressing a key, moving the mouse or touching the screen switches back.
+
+| Button (Xbox / PlayStation) | Action |
+| --- | --- |
+| Left stick | Move. Click it to sprint until you stop |
+| Right stick | Look around. Click it to switch between third and first person |
+| A / Cross | Jump. In the air: open or close the glider. On a wall: leap up. Moves dialogue on |
+| B / Circle | Hold to sprint. On a wall or glider: let go. In menus: back |
+| X / Square | Talk, read, use, open a chest, push a crate |
+| Y / Triangle | Grab the wall in front of you, or let go |
+| RT / R2 | Hold to break a block, press to attack |
+| LT / L2 | Place the selected block. With anything else in hand, hold to raise your shield |
+| LB, RB / L1, R1 | Choose a hotbar slot |
+| D-pad | Up: switch quest. Down: switch camera. Left: crafting. Right: inventory |
+| View / Create | Map (sticks move it, triggers zoom, Y finds you) |
+| Menu / Options | Pause |
+
+In menus the D-pad or left stick moves between buttons and A presses. In the inventory the D-pad moves a highlight over the slots: A picks up or puts down a stack, X takes half or puts down one, Y moves a stack between the pack and the hotbar, and the bin is below the hotbar.
 
 ## What's in the game
 
@@ -132,6 +170,7 @@ From the command line: `godot --headless --export-debug Android export/Adventure
 | `scripts/hud.gd` | Hearts, stamina, hotbar, quest panel, dialogue, banners, toasts and menus |
 | `scripts/map.gd` | The map: paints explored columns into per-chunk pictures, saves them, and draws the map screen |
 | `scripts/touch.gd` | On-screen controls for phones: move stick, look drag and buttons, with every finger tracked |
+| `scripts/pad.gd` | Game controller support: sticks, buttons, triggers, menus, inventory and map, and the button names for prompts |
 | `export_presets.cfg` | The Android export (signed debug APK, 64-bit ARM, landscape) |
 | `assets/audio/` | Generated sounds and music (CC0) |
 | `tools/make_audio.py` | Regenerates every sound |
@@ -139,6 +178,7 @@ From the command line: `godot --headless --export-debug Android export/Adventure
 | `tests/underground.gd` | Checks saving and loading (island and wild edits, inventory, quests, puzzles), caves, ores, smelting and New world |
 | `tests/visuals.gd` | Checks item models and icons, lantern light in a cave (and after saving and loading, and with many lanterns), and takes screenshots of the scenery and characters |
 | `tests/touch.gd` | Sends pretend finger touches: stick, look, every button, hotbar taps, inventory tap modes, phone graphics, and screenshots at a phone's shape |
+| `tests/pad.gd` | Sends pretend controller input: moving, looking, every button and trigger, the inventory, crafting, map, dialogue, pause and knocked-out screens, and the button names for Xbox, PlayStation and Switch pads |
 | `tests/map_shield.gd` | Checks the map filling in, opening and zooming, the shield recipe, blocking from the front only, perfect blocks, the guard breaking, the Map and Block buttons, and both surviving a save |
 | `tests/wild.gd` | Checks the wild lands: every biome appears, chunks stream in fast enough to glide, edits survive leaving, ruins have chests |
 | `prototype/web/index.html` | The original browser prototype, kept for reference |

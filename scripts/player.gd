@@ -363,7 +363,7 @@ func use_stamina(amount: float) -> void:
 
 func start_glide() -> void:
 	if game.count("glider") <= 0:
-		game.toast("Craft a Leaf Glider (C) to glide")
+		game.toast("Craft a Leaf Glider (%s) to glide" % game.hud.prompt_key("craft"))
 		return
 	if exhausted:
 		return
@@ -393,6 +393,12 @@ func update(dt: float, jump: bool) -> void:
 		in_f = clampf(in_f + touch.move.y, -1.0, 1.0)
 		in_r = clampf(in_r + touch.move.x, -1.0, 1.0)
 		shift = shift or touch.sprint
+	# A game controller's left stick and sprint button.
+	var pad = game.pad if game != null else null
+	if pad != null and pad.enabled:
+		in_f = clampf(in_f + pad.move.y, -1.0, 1.0)
+		in_r = clampf(in_r + pad.move.x, -1.0, 1.0)
+		shift = shift or pad.sprint
 	in_water = pos.y + 0.7 < World.WATER_SURF
 	if in_water and not _was_in_water and vel.y < -2.0:
 		game.audio.play("splash", -4.0)
@@ -524,7 +530,7 @@ func _update_walk(dt: float, f: Vector3, r: Vector3, in_f: float, in_r: float, s
 	if in_water:
 		vel.y -= 7.0 * dt
 		vel.y *= pow(0.15, dt)
-		if _key(KEY_SPACE) or (game.touch != null and game.touch.jump_held):
+		if _key(KEY_SPACE) or (game.touch != null and game.touch.jump_held) or (game.pad != null and game.pad.jump_held):
 			vel.y = minf(vel.y + 20.0 * dt, 3.2)
 	else:
 		vel.y = maxf(-45.0, vel.y - 26.0 * dt)
