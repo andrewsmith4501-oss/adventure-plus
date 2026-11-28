@@ -18,6 +18,8 @@ signal music_volume_changed(value: float)
 signal sound_volume_changed(value: float)
 signal graphics_toggled
 signal map_closed
+signal journal_pressed
+signal choice_pressed(index: int)
 
 const Art = preload("res://scripts/art.gd")
 const MapData = preload("res://scripts/map.gd")
@@ -217,6 +219,13 @@ var prompt_label: Label
 var dialog_panel: PanelContainer
 var dialog_name: Label
 var dialog_text: Label
+## The options of a line that asks you to choose (one label each).
+var choice_box: VBoxContainer
+var _choice_labels: Array = []
+var journal_text: RichTextLabel
+var journal_count: Label
+var journal_scroll: ScrollContainer
+var journal_button: Button
 var banner: VBoxContainer
 var banner_title: Label
 var banner_sub: Label
@@ -320,6 +329,10 @@ func _ready() -> void:
 	dbox.add_child(dialog_name)
 	dialog_text = _label("", 17, INK, true)
 	dbox.add_child(dialog_text)
+	choice_box = VBoxContainer.new()
+	choice_box.add_theme_constant_override("separation", 4)
+	choice_box.visible = false
+	dbox.add_child(choice_box)
 	var cont := _label("F or click to continue", 12, INK_DIM)
 	cont.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	dbox.add_child(cont)
@@ -339,6 +352,7 @@ func _ready() -> void:
 	_build_inventory_screen()
 	_build_dead_screen()
 	_build_map_screen()
+	_build_journal_screen()
 
 
 # ---------------------------------------------------------------- helpers
@@ -447,6 +461,7 @@ func _build_start_screen() -> void:
 		["C", "Open crafting"],
 		["E or I", "Open your inventory"],
 		["M", "Open the map. It fills in as you explore"],
+		["J", "Open your Journal: all you've learned of the world"],
 		["Right click, X", "Hold to raise your shield (when you have one and aren't holding a block)"],
 		["V", "Switch between third and first person"],
 		["Esc", "Pause"],
@@ -527,6 +542,15 @@ func _build_start_screen() -> void:
 	for st in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
 		new_world_button.add_theme_color_override(st, INK)
 	row.add_child(new_world_button)
+	journal_button = _button("Journal")
+	journal_button.pressed.connect(func() -> void: journal_pressed.emit())
+	journal_button.visible = false
+	for st in ["normal", "hover", "pressed"]:
+		var bg := Color("3a423c") if st == "normal" else (Color("4a544d") if st == "hover" else Color("2f3631"))
+		journal_button.add_theme_stylebox_override(st, _style(bg, 8, 10, 18))
+	for st in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		journal_button.add_theme_color_override(st, INK)
+	row.add_child(journal_button)
 
 
 func set_graphics_label(phone: bool) -> void:
@@ -861,6 +885,7 @@ func show_screen(key: String) -> void:
 
 func set_paused_title(paused: bool) -> void:
 	start_title.text = "Paused" if paused else "Adventure Plus"
+	journal_button.visible = paused
 	play_button.text = "Resume" if paused else ("Continue" if _has_save else "Play")
 	new_world_button.text = "New world"
 	if paused:
@@ -976,14 +1001,103 @@ func set_prompt(text: String) -> void:
 		prompt_label.text = text
 
 
-func show_dialog(speaker: String, text: String) -> void:
+func show_dialog(speaker: String, text: String, options: Array = [], sel := 0) -> void:
 	dialog_name.text = speaker.to_upper()
 	dialog_text.text = text
 	dialog_panel.visible = true
+	for l in _choice_labels:
+		l.queue_free()
+	_choice_labels.clear()
+	choice_box.visible = not options.is_empty()
+	for i in options.size():
+		var on := i == sel
+		var l := _label(("> " if on else "   ") + "%d  %s" % [i + 1, options[i]], 17, ACCENT if on else INK_DIM, true)
+		l.mouse_filter = Control.MOUSE_FILTER_STOP
+		var idx := i
+		l.gui_input.connect(func(ev: InputEvent) -> void:
+			if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT and ev.device != InputEvent.DEVICE_ID_EMULATION:
+				choice_pressed.emit(idx))
+		choice_box.add_child(l)
+		_choice_labels.append(l)
+	if options.is_empty():
+		_apply_mode()
+	else:
+		dialog_hint.text = _choice_hint()
+
+
+func _choice_hint() -> String:
+	if pad_mode and pad != null:
+		return "D-pad to choose, %s to pick" % prompt_key("jump")
+	if touch_mode:
+		return "Tap an answer"
+	return "1 or 2, or W/S and F, to choose"
+
+
+## The option under a screen point (a tap), or -1.
+func choice_at(p: Vector2) -> int:
+	for i in _choice_labels.size():
+		var l: Label = _choice_labels[i]
+		if l.get_global_rect().grow(6.0).has_point(p):
+			return i
+	return -1
 
 
 func hide_dialog() -> void:
 	dialog_panel.visible = false
+
+
+func _build_journal_screen() -> void:
+	var dim := ColorRect.new()
+	dim.color = Color(0.04, 0.055, 0.047, 0.75)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	root.add_child(dim)
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", _style(Color("18201b"), 12, 18, 22, EDGE, 1))
+	_place(panel, 0.5, 0, 0.5, 1, -380, 28, 380, -28)
+	dim.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 10)
+	panel.add_child(box)
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 14)
+	box.add_child(head)
+	head.add_child(_label("Journal", 26))
+	journal_count = _label("", 15, ACCENT)
+	journal_count.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	journal_count.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	head.add_child(journal_count)
+	journal_scroll = ScrollContainer.new()
+	journal_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	journal_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	box.add_child(journal_scroll)
+	journal_text = RichTextLabel.new()
+	journal_text.bbcode_enabled = true
+	journal_text.fit_content = true
+	journal_text.scroll_active = false
+	journal_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	journal_text.add_theme_font_size_override("normal_font_size", 16)
+	journal_text.add_theme_font_size_override("bold_font_size", 17)
+	journal_text.add_theme_color_override("default_color", INK)
+	journal_scroll.add_child(journal_text)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	box.add_child(row)
+	var hint := _label("Newest first. Everything you learn about the world is kept here.", 14, INK_DIM, true)
+	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(hint)
+	var close := _button("Back to the world")
+	close.pressed.connect(func() -> void: journal_pressed.emit())
+	row.add_child(close)
+	screens["journal"] = dim
+	dim.visible = false
+
+
+func show_journal(text: String, count: String) -> void:
+	journal_text.text = text
+	journal_count.text = count
+	journal_scroll.scroll_vertical = 0
+	show_screen("journal")
 
 
 func show_banner(title: String, sub: String) -> void:

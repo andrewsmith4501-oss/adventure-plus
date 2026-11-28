@@ -14,6 +14,7 @@ const TouchControls = preload("res://scripts/touch.gd")
 const GamepadControls = preload("res://scripts/pad.gd")
 const Art = preload("res://scripts/art.gd")
 const MapData = preload("res://scripts/map.gd")
+const Lore = preload("res://scripts/lore.gd")
 
 var items := {
 	"dirt": {"name": "Dirt", "color": Color("865e3b"), "block": World.DIRT},
@@ -49,6 +50,9 @@ var items := {
 	# "guard" is the stamina a blocked hit costs.
 	"wshield": {"name": "Wooden Shield", "color": Color("b48a52"), "shield": 1, "guard": 22.0},
 	"ishield": {"name": "Iron Shield", "color": Color("c4cad2"), "shield": 2, "guard": 11.0},
+	# From the lore quest, The Seventh Thread: one or the other.
+	"shears": {"name": "Unweaver's Shears", "color": Color("b9a8c9"), "damage": 7},
+	"needle": {"name": "Mender's Needle", "color": Color("f2d48b"), "damage": 5},
 }
 var drops := {
 	World.GRASS: "dirt", World.DRYGRASS: "dirt", World.DIRT: "dirt", World.STONE: "stone",
@@ -155,13 +159,13 @@ var side := [
 var done := {}
 
 const TABLETS := {
-	"hollow_0": ["Two stones wait for weight. A Mender cannot stand in two places at once... but a Mender can build."],
+	"hollow_0": ["Carved in the Loomwright hand, under a feather through a knot, the sign of Aeron:", "Two stones wait for weight. A Mender cannot stand in two places at once... but a Mender can build."],
 	"hollow_1": ["The wind remembers the way up. Spread your wings above the vent and let it carry you."],
 	"shrine_1": ["A crate cannot climb, but it can be pushed. Stand behind it and press F.", "(If a crate gets stuck, read this tablet again and it slides back.)"],
 	"shrine_reset": ["Weight on both plates opens the way. Think before you push: a crate in a corner stays there.", "(If a crate gets stuck, read this tablet again and they slide back.)"],
 	"shrine_3": ["This ledge is Loomstone, and no hand can climb it. But what a Mender builds, a Mender may climb."],
 	"riddles": [
-		"The Loomwrights hid five caches when the Fray began. Their riddles are carved here.",
+		"High Loomwright Orsolya Vane had five caches hidden when the war with the Knotless was lost. Her riddles are carved here, and a page of her journal waits in each cache.",
 		"One: the small table of the Steppes stands alone to the north. Its top keeps a secret.",
 		"Two: a meadow floats above the cliff road, where no foot can reach. Only the wind can take you up.",
 		"Three: under the western hills, by the river, a mouth in the grass breathes cold air.",
@@ -170,18 +174,19 @@ const TABLETS := {
 	],
 }
 const REGIONS := {
-	"hearthvale": ["Hearthvale", "Meadows, rivers and a quiet camp"],
-	"steppes": ["Gale Steppes", "Mind the gusts"],
-	"hollow": ["Windworn Hollow", "A Loomwright dungeon"],
-	"shrine": ["Hearthroot Shrine", "A Loomwright shrine"],
+	"hearthvale": ["Hearthvale", "Where Hessa lit the first hearth"],
+	"steppes": ["Gale Steppes", "Aeron's wind country. Mind the gusts"],
+	"hollow": ["Windworn Hollow", "A Galeborn wind-hall of the Loomwrights"],
+	"shrine": ["Hearthroot Shrine", "A shrine to Hessa, the Hearthmother"],
+	"sanctum": ["Sanctum of the Six Knots", "Where the Last Knot was first tied"],
 	# The wild lands beyond the island (see World.BIOMES).
-	"sea": ["The Open Sea", "Land lies past the horizon"],
-	"plains": ["Sunmeadow Plains", "Wide grass under a wide sky"],
-	"forest": ["Bramblewood", "Old trees and deep shade"],
-	"desert": ["Amber Dunes", "Sand as far as you can see"],
-	"badlands": ["Rustrock Badlands", "Striped cliffs and dry wind"],
-	"taiga": ["Frostpine Wilds", "Snow under the pines"],
-	"peaks": ["Frostspine Peaks", "Snow, stone and a long way down"],
+	"sea": ["The Open Sea", "Maru's tides. Land lies past the horizon"],
+	"plains": ["Sunmeadow Plains", "Ilvy's fields under a wide sky"],
+	"forest": ["Bramblewood", "Old trees where the Thornlings were born"],
+	"desert": ["Amber Dunes", "Solenne's sands, where the Amber Archive burned"],
+	"badlands": ["Rustrock Badlands", "The old Sunwrought forges"],
+	"taiga": ["Frostpine Wilds", "Ilvy sleeps under Duun's snow"],
+	"peaks": ["Frostspine Peaks", "Duun's mountains, and the sealed Deepkin halls"],
 }
 ## Music and ambience for each region of the wild lands.
 const WILD_AUDIO := {
@@ -198,6 +203,8 @@ var hud: Hud
 var touch: TouchControls
 ## Game controller support (takes over as soon as a pad is used).
 var pad: GamepadControls
+## The world's lore: the Journal, Sable, the Sanctum and The Seventh Thread.
+var lore: Lore
 ## "high" or "phone": how far the world loads and how many effects are drawn.
 var graphics := "high"
 var audio: Audio
@@ -225,6 +232,7 @@ var _dialog: Array = []
 var _dialog_i := 0
 var _dialog_speaker := ""
 var _dialog_done: Callable
+var _choice_i := 0
 var _plate_state: Array = []
 var _door_open := false
 var _node_restored := false
@@ -298,6 +306,7 @@ var _new_world_armed := false
 
 func _ready() -> void:
 	_rng.seed = 99
+	quests.append(Lore.quest())
 	_setup_environment()
 
 	audio = Audio.new()
@@ -346,6 +355,11 @@ func _ready() -> void:
 	wren.world = world
 	npcs.append(wren)
 
+	lore = Lore.new()
+	lore.game = self
+	add_child(lore)
+	lore.setup(self)
+
 	hud = Hud.new()
 	hud.audio = audio
 	add_child(hud)
@@ -359,6 +373,8 @@ func _ready() -> void:
 	hud.craft_requested.connect(_craft)
 	hud.music_volume_changed.connect(audio.set_music_volume)
 	hud.sound_volume_changed.connect(audio.set_sound_volume)
+	hud.journal_pressed.connect(toggle_journal)
+	hud.choice_pressed.connect(choice_pick)
 	hud.graphics_toggled.connect(func() -> void: set_graphics("high" if graphics == "phone" else "phone"))
 
 	touch = TouchControls.new()
@@ -403,6 +419,7 @@ func _ready() -> void:
 	_add_shadow(player, 0.42)
 	for n in npcs:
 		_add_shadow(n, 0.4)
+	_add_shadow(lore.sable, 0.4)
 	for e in enemies:
 		_add_shadow(e, 0.5)
 	_bake_icons()
@@ -922,7 +939,8 @@ func _render_quest() -> void:
 	var q: Dictionary = quests[tracked]
 	var steps := []
 	for g in q["steps"]:
-		steps.append({"text": str(g["text"]).replace("(C)", "(%s)" % hud.prompt_key("craft")), "done": done.has(g["id"])})
+		var text := lore.step_text(g["id"], str(g["text"]))
+		steps.append({"text": text.replace("(C)", "(%s)" % hud.prompt_key("craft")), "done": done.has(g["id"])})
 	var extra := []
 	for g in side:
 		if g.has("needs") and not done.has(g["needs"]):
@@ -937,6 +955,10 @@ func _render_quest() -> void:
 			others += 1
 	var footer := "%s  Switch quest (%d more)" % [hud.prompt_key("quest"), others] if others > 0 else ""
 	hud.set_quest(q["title"], steps, extra, footer)
+
+
+func render_quest() -> void:
+	_render_quest()
 
 
 ## Q cycles the tracked quest through the ones not finished yet.
@@ -991,17 +1013,53 @@ func _say(speaker: String, lines: Array, on_done := Callable()) -> void:
 	_dialog_i = 0
 	_dialog_speaker = speaker
 	_dialog_done = on_done
+	_choice_i = 0
 	mouse_down = false
 	hud.set_prompt("")
 	_show_line()
 
 
 func _show_line() -> void:
-	hud.show_dialog(_dialog_speaker, str(_dialog[_dialog_i]).replace("Press C to craft", "Press %s to craft" % hud.prompt_key("craft")))
+	var line = _dialog[_dialog_i]
+	if line is Dictionary:
+		hud.show_dialog(_dialog_speaker, str(line["text"]), line["options"], _choice_i)
+	else:
+		hud.show_dialog(_dialog_speaker, str(line).replace("Press C to craft", "Press %s to craft" % hud.prompt_key("craft")))
 	audio.play("talk%d" % (1 + _dialog_i % 3), -6.0, 0.05)
 
 
+## True while a line with options to pick from is shown.
+func choosing() -> bool:
+	return talking() and _dialog[_dialog_i] is Dictionary
+
+
+## Moves the highlighted option up (-1) or down (1).
+func choice_move(d: int) -> void:
+	if not choosing():
+		return
+	var n: int = _dialog[_dialog_i]["options"].size()
+	_choice_i = (_choice_i + d + n) % n
+	audio.play("ui_click", -8.0, 0.0)
+	_show_line()
+
+
+## Picks an option on the current line and goes on.
+func choice_pick(i: int) -> void:
+	if not choosing():
+		return
+	var line: Dictionary = _dialog[_dialog_i]
+	_dialog = []
+	_choice_i = 0
+	hud.hide_dialog()
+	audio.play("ui_click", -4.0, 0.0)
+	var f: Callable = line["pick"]
+	f.call(i)
+
+
 func _advance_dialog() -> void:
+	if choosing():
+		choice_pick(_choice_i)
+		return
 	_dialog_i += 1
 	if _dialog_i < _dialog.size():
 		_show_line()
@@ -1017,10 +1075,18 @@ func talking() -> bool:
 
 
 func _talk_to_bryn() -> void:
+	var ll: Array = lore.bryn_lines()
+	if not ll.is_empty():
+		_say("Bryn", ll, lore.bryn_done)
+		return
+	var idle: Array = lore.bryn_idle()
+	if not idle.is_empty() and done.has("return"):
+		_say("Bryn", idle)
+		return
 	if not done.has("talk"):
 		_say("Bryn", [
-			"Ah, a Mender! I hoped one would come. I'm Bryn. I study the old Loomwrights, who wove this land together from living threads of stone.",
-			"Their great Loom has stopped, and the Fray is pulling the world apart. Feel how still the air is? Even the wind is fraying.",
+			"Ah, a Mender! I hoped one would come. I'm Bryn. I study the old Loomwrights, who kept this land woven tight with living threads of stone.",
+			"Their great Loom, the Heartloom, has stood still for three hundred years, and the Fray is pulling the world apart. Feel how still the air is? Even Aeron's wind is fraying.",
 			"East, past the river and up the cliffs, lie the Gale Steppes. Inside the great mesa there is a Loomwright place, the Windworn Hollow. Its Thread Node holds the wind.",
 			"You'll need wings to ride that wind. Gather leaves and sticks and craft a Leaf Glider. Then find the Hollow, restore the Node, and come back to me.",
 		], func() -> void: complete("talk"))
@@ -1028,7 +1094,7 @@ func _talk_to_bryn() -> void:
 		_say("Bryn", [
 			"You did it! I felt the wind turn over, all the way down here.",
 			"The Hollow taught you its trick. Here: the Loomwright updraft vent. Three stone and a piece of Skyglass make one, and you can set it down anywhere.",
-			"Every cliff in the land is a glide route now. There are five more Spires out there, each with its own Hollow... but that's a story for another day.",
+			"Every cliff in the land is a glide route now. There are five more Spires out there, each with its own Hollow... and something about that Node troubles me. Come and talk to me again when you've rested.",
 		], _reward)
 	elif done.has("return"):
 		_say("Bryn", [
@@ -1048,6 +1114,7 @@ func _talk_to_bryn() -> void:
 
 
 func _talk_to_wren() -> void:
+	var lw: Array = lore.wren_lines() if done.has("wren_return") and not wren.walking() else []
 	if wren.walking():
 		_say("Wren", ["Coming, coming! Carts are slow, and so am I."])
 	elif not done.has("wren_talk") and done.has("bridge"):
@@ -1076,6 +1143,8 @@ func _talk_to_wren() -> void:
 			"Here's my thanks: ladders and spring pads. Craft them at a workbench. Ladders cost no stamina, and they cling to anything, even Loomstone.",
 			"A spring pad flings you into the sky, so open your glider at the top. I'll set up a workbench by Bryn's fire.",
 		], _reward_wren)
+	elif not lw.is_empty():
+		_say("Wren", lw)
 	elif not done.has("shrine_chest"):
 		_say("Wren", [
 			"Stand near a workbench and press C. Four planks make one, if you want your own.",
@@ -1392,6 +1461,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		if talking():
 			if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
 				_advance_dialog()
+			elif mb.pressed and mb.button_index == MOUSE_BUTTON_WHEEL_UP:
+				choice_move(-1)
+			elif mb.pressed and mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+				choice_move(1)
 			return
 		if OS.has_feature("web") and mb.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED and not touch.enabled:
 			# The browser did not lock the mouse yet: this click does it.
@@ -1421,7 +1494,24 @@ func _unhandled_input(event: InputEvent) -> void:
 		if not k.pressed or k.echo:
 			return
 		var code := k.physical_keycode
-		if code == KEY_M:
+		if running and choosing():
+			if code == KEY_1 or code == KEY_2 or code == KEY_3:
+				var n: int = _dialog[_dialog_i]["options"].size()
+				if code - KEY_1 < n:
+					choice_pick(code - KEY_1)
+				return
+			if code == KEY_W or code == KEY_UP:
+				choice_move(-1)
+				return
+			if code == KEY_S or code == KEY_DOWN:
+				choice_move(1)
+				return
+			if code == KEY_ENTER or code == KEY_KP_ENTER:
+				choice_pick(_choice_i)
+				return
+		if code == KEY_J:
+			toggle_journal()
+		elif code == KEY_M:
 			toggle_map()
 		elif code == KEY_C:
 			if hud.screens["inv"].visible:
@@ -1437,7 +1527,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				hud.hide_dialog()
 			elif running:
 				_pause()
-			elif hud.screens["craft"].visible or hud.screens["inv"].visible or hud.screens["map"].visible:
+			elif hud.screens["craft"].visible or hud.screens["inv"].visible or hud.screens["map"].visible or hud.screens["journal"].visible:
 				_resume()
 		elif not running:
 			return
@@ -1487,7 +1577,7 @@ func inv_click(i: int, button: int, shift: bool) -> void:
 
 ## Closes the crafting, inventory or map screen and goes back to the world.
 func close_menu() -> void:
-	if hud.screens["craft"].visible or hud.screens["inv"].visible or hud.screens["map"].visible:
+	if hud.screens["craft"].visible or hud.screens["inv"].visible or hud.screens["map"].visible or hud.screens["journal"].visible:
 		_resume()
 
 
@@ -1495,7 +1585,7 @@ func close_menu() -> void:
 func refresh_prompts() -> void:
 	_render_quest()
 	if talking():
-		hud.show_dialog(_dialog_speaker, str(_dialog[_dialog_i]).replace("Press C to craft", "Press %s to craft" % hud.prompt_key("craft")))
+		_show_line()
 
 
 func pause() -> void:
@@ -1530,6 +1620,23 @@ func toggle_map() -> void:
 	map.reveal(world, player.pos, _sight(), true)
 	_update_map_view(true)
 	hud.show_screen("map")
+	audio.play("map_open", -4.0)
+
+
+## J (or Journal on the pause screen): everything learned about the world.
+func toggle_journal() -> void:
+	if hud.screens["journal"].visible:
+		_resume()
+		return
+	if hud.screens["craft"].visible or hud.screens["inv"].visible or hud.screens["map"].visible:
+		_resume()
+	if talking() or not started:
+		return
+	running = false
+	mouse_down = false
+	block_held = false
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	hud.show_journal(lore.journal_text(), lore.journal_count())
 	audio.play("map_open", -4.0)
 
 
@@ -1582,6 +1689,8 @@ func _interaction() -> Dictionary:
 		if (npc.pos - player.pos).length() < 3.2:
 			var f: Callable = _talk_to_bryn if npc == bryn else _talk_to_wren
 			return {"text": "F  Talk to " + npc.display_name, "do": f}
+	if lore.sable.visible and (lore.sable.pos - player.pos).length() < 3.2:
+		return {"text": "F  Talk to Sable", "do": lore.talk_to_sable}
 	var tg := _current_target()
 	if not tg.has("block"):
 		return {}
@@ -1593,9 +1702,16 @@ func _interaction() -> Dictionary:
 		var text := "F  Read the tablet"
 		if key == "riddles":
 			text = "F  Read the riddle tablet"
+		elif key.begins_with("ruin_"):
+			text = "F  Read the inscription"
+		elif lore.is_lore_tablet(key):
+			text = "F  Read the carving"
 		return {"text": text, "do": func() -> void: _read_tablet(key)}
 	if b == World.NODE:
 		var which: String = world.nodes.get(bp, "hollow")
+		if which == "sanctum":
+			var t := lore.node_prompt()
+			return {} if t == "" else {"text": t, "do": lore.use_node}
 		return {"text": "F  Restore the Thread Node", "do": _restore_node if which == "hollow" else _restore_shrine_node}
 	if b == World.CHEST:
 		return {"text": "F  Open the chest", "do": func() -> void: _open_chest(bp)}
@@ -1605,6 +1721,10 @@ func _interaction() -> Dictionary:
 
 
 func _read_tablet(key: String) -> void:
+	if lore.is_lore_tablet(key):
+		_say(lore.tablet_speaker(key), lore.tablet_lines(key))
+		lore.on_read(key)
+		return
 	var lines: Array = TABLETS.get(key, TABLETS["hollow_0"])
 	_say("Loomwright tablet", lines)
 	if key == "shrine_1" and not _gate1_open:
@@ -1630,7 +1750,7 @@ func _process(delta: float) -> void:
 		player.update(dt, jump_pressed)
 		for e in enemies:
 			# Thornlings left far behind find their way to wherever you are.
-			if e.alive and e.pos.distance_to(player.pos) > 110.0:
+			if e.alive and not e.guardian and e.pos.distance_to(player.pos) > 110.0:
 				e.alive = false
 				e.visible = false
 				e.respawn_t = 3.0 + _rng.randf() * 8.0
@@ -1640,6 +1760,7 @@ func _process(delta: float) -> void:
 		_update_hollow()
 		_update_shrine()
 		_update_bridge(dt)
+		lore.update(dt)
 		var it := _interaction()
 		hud.set_prompt(it.get("text", ""))
 		_check_web_mouse()
@@ -1706,6 +1827,8 @@ func _quest_target():
 			return wren.pos
 		var a: Vector2i = world.ford["a"]
 		return Vector3(a.x + 3, 0, a.y)
+	if title == "The Seventh Thread":
+		return lore.target()
 	if title == "The Hearthroot Shrine" and not done.has("shrine_chest"):
 		if not done.has("shrine_find"):
 			return Vector3(World.SHRINE_X0 - 5, World.SHRINE_FY, (World.SHRINE_Z0 + World.SHRINE_Z1) / 2.0)
@@ -1757,6 +1880,8 @@ func map_markers() -> Array:
 		out.append({"pos": Vector2(World.MESA_CX, World.MESA_CZ), "color": Color("9fd8e8"), "label": "Windworn Hollow"})
 	if _seen_regions.has("shrine") or done.has("shrine_find"):
 		out.append({"pos": Vector2((World.SHRINE_X0 + World.SHRINE_X1) / 2.0, (World.SHRINE_Z0 + World.SHRINE_Z1) / 2.0), "color": Color("9fd8e8"), "label": "Hearthroot Shrine"})
+	if lore.sable_here() or _seen_regions.has("sanctum"):
+		out.append({"pos": Vector2(World.STONES_X, World.STONES_Z), "color": Color("b9a8c9"), "label": "Stilling Stones"})
 	if map.explored(World.NEEDLE_X, World.NEEDLE_Z):
 		out.append({"pos": Vector2(World.NEEDLE_X, World.NEEDLE_Z), "color": Color("79f0ff"), "label": "Needle Rock"})
 	if map.explored(wren.pos.x, wren.pos.z):
@@ -1797,8 +1922,8 @@ func _update_region(dt: float) -> void:
 		audio.play_music(WILD_AUDIO[r][0])
 		audio.play_ambience(WILD_AUDIO[r][1])
 	else:
-		audio.play_music(r)
-		audio.play_ambience({"hearthvale": "meadow", "steppes": "steppes", "hollow": "hollow", "shrine": "hollow"}[r])
+		audio.play_music("shrine" if r == "sanctum" else r)
+		audio.play_ambience({"hearthvale": "meadow", "steppes": "steppes", "hollow": "hollow", "shrine": "hollow", "sanctum": "hollow"}[r])
 	if not started:
 		return
 	if not _seen_regions.has(r):
@@ -1991,6 +2116,7 @@ const CHESTS := {
 	"mesa": {"items": {"skyglass": 4, "vent": 1}},
 	"far_mesa": {"items": {"bricks": 8, "lantern": 3, "spring": 1}},
 	"beach": {"items": {"log": 6, "skyglass": 2}},
+	"sanctum": {"items": {"sunstone": 2, "iron": 3, "lantern": 4}},
 }
 ## What ruins and floating isles in the wild lands can hold (a few picks each).
 const WILD_LOOT := {
@@ -2031,6 +2157,8 @@ func _open_chest(bp: Vector3i) -> void:
 		toast("Found " + ", ".join(got))
 	if key == "shrine":
 		complete("shrine_chest")
+	elif key == "sanctum":
+		pass
 	elif WILD_LOOT.has(key):
 		ruins_found += 1
 		if got.is_empty():
@@ -2038,6 +2166,7 @@ func _open_chest(bp: Vector3i) -> void:
 	elif key != "":
 		caches_found += 1
 		toast("Lost cache %d of %d" % [caches_found, CACHE_COUNT])
+		lore.on_cache(caches_found)
 		if caches_found >= CACHE_COUNT:
 			complete("caches")
 		else:
@@ -2292,6 +2421,7 @@ func _update_interaction(dt: float) -> void:
 				audio.play_at("enemy_defeat", epos)
 				toast("Thornling defeated")
 				complete("enemy")
+				lore.on_enemy_defeated(enemy)
 			else:
 				audio.play_at("enemy_hit", epos)
 			player.attack_cd = 0.45
@@ -2457,6 +2587,7 @@ func save_data() -> Dictionary:
 		"npcs": {"bryn": bryn.pos, "wren": wren_at},
 		"volume": {"music": hud.music_slider.value, "sound": hud.sound_slider.value},
 		"map": map.to_save(),
+		"lore": lore.to_save(),
 	}
 
 
@@ -2563,6 +2694,7 @@ func apply_save(d: Dictionary) -> void:
 	bryn.pos = np.get("bryn", bryn.pos)
 	wren.pos = np.get("wren", wren.pos)
 	map.from_save(d.get("map", {}))
+	lore.from_save(d.get("lore", {}))
 	var vol: Dictionary = d.get("volume", {})
 	if vol.has("music"):
 		hud.music_slider.value = vol["music"]

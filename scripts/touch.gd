@@ -158,6 +158,12 @@ func _hotbar_slot_at(p: Vector2) -> int:
 
 
 func _press(i: int, p: Vector2) -> void:
+	if game.choosing():
+		# A question: only a tap on one of the answers picks it.
+		var c: int = game.hud.choice_at(p)
+		if c >= 0:
+			game.choice_pick(c)
+		return
 	if game.talking():
 		# Any tap moves the conversation on.
 		game.advance_dialog()

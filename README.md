@@ -95,6 +95,8 @@ What the web version does differently:
 | C | Crafting (some recipes need a workbench nearby) |
 | E or I | Inventory: a 27-slot pack plus the hotbar. Click to move stacks, right-click to split, shift-click to swap between pack and hotbar, and a bin to throw things away |
 | Q | Switch which quest is shown on screen |
+| J | Journal: everything you've learned about the world (also on the pause screen) |
+| 1, 2 or W/S then F | Pick an answer when someone asks you to choose |
 | V | Switch between third and first person |
 | Esc | Pause (music and sound volume are on the pause screen). Pausing also saves |
 
@@ -120,6 +122,12 @@ Any Xbox, PlayStation or Switch controller works (USB or Bluetooth, on a compute
 In menus the D-pad or left stick moves between buttons and A presses. In the inventory the D-pad moves a highlight over the slots: A picks up or puts down a stack, X takes half or puts down one, Y moves a stack between the pack and the hotbar, and the bin is below the hotbar.
 
 ## What's in the game
+
+**The story.** The world is Tessaren, woven on the Heartloom by seven gods, the Weavers: Duun (stone), Maru (sea), Solenne (sun and forge), Aeron (wind), Ilvy (the wild green) and Hessa (hearth and home), and Caedrith, who tied off every ending until he decided the woven world was a cage and began to cut. Three hundred years ago the High Loomwright Orsolya Vane bound him beneath the Heartloom with the Last Knot, and the Loom stopped. Now the knot is slipping, the Fray is spreading, and you are a Mender, someone who can see the threads and tie them again. The whole setting (pantheon, history, peoples, factions, every realm) is written up in the project's lore bible.
+
+**The Seventh Thread.** The main lore quest, once the Windworn Hollow is restored. Bryn tells you the Hollow's thread was cut, not frayed, and the story of the Weavers. Read the Galeborn carving by the Hollow's Node, the Hearthfolk prayer on the shrine's high ledge and three inscriptions in ruins out in the wild lands. Then Sable, a Shearbearer of the Knotless, waits at the Stilling Stones south-east of camp and offers you Caedrith's own Shears: take them and cut the knot's anchor, or refuse and retie it. Either way you go down into the Sanctum of the Six Knots, walk its six plates in the order the world was woven (the hymn by the door names the Weavers by title, the tablets above the plates by name; a wrong step turns them all dark), defeat three frayed guardians and face the Thread Node. Retie it for one more heart and Bryn's Mender's Needle (5 damage), or cut it for a bigger stamina ring and keep the Unweaver's Shears (7 damage). Bryn, Wren and Sable each react to what you chose.
+
+**The Journal.** Press **J** (or **Journal** on the pause screen) to read everything you've learned: what people tell you, every carving and inscription, and Orsolya Vane's journal, whose five pages are in the five lost caches (always in order, whichever cache you open first). Every ruin court and watchtower in the wild lands has a carved inscription about its realm, three different ones per biome. 36 entries in all; they're saved with your world.
 
 **Hearthvale.** The starting valley: meadows, a river, low terraced cliffs and a camp where Bryn, an old Loomwright scholar, gives you the first quest.
 
@@ -163,7 +171,8 @@ In menus the D-pad or left stick moves between buttons and A presses. In the inv
 | `scripts/game.gd` | Sets up the scene; items, crafting, quests, dialogue, the Hollow and shrine puzzles, chests, gusts, vents, block interaction, mining and saving |
 | `scripts/world.gd` | Voxel data, Hearthvale and Gale Steppes terrain, the Hollow, the shrine, the ford, the floating isle, the cave, the endless wild lands (biomes, ruins, caves and ores, chunk streaming on worker threads), saved edits, chunk meshes, collision and raycasts |
 | `scripts/player.gd` | The hero: movement, climbing, gliding, updrafts, footsteps, animation and the camera |
-| `scripts/npc.gd` | Bryn and Wren |
+| `scripts/npc.gd` | Bryn, Wren and Sable |
+| `scripts/lore.gd` | The world's lore: every carving, inscription and journal page, the Journal, Sable and the choice, the Sanctum's hymn plates and guardians, and The Seventh Thread |
 | `scripts/thornling.gd` | The Thornling enemy |
 | `scripts/art.gd` | How things look: paints the block textures, the block models (lanterns, chests...), item models and the terrain, item, water and sky shaders |
 | `scripts/audio.gd` | Sound effects, ambience and music with cross-fades |
@@ -180,6 +189,7 @@ In menus the D-pad or left stick moves between buttons and A presses. In the inv
 | `tests/touch.gd` | Sends pretend finger touches: stick, look, every button, hotbar taps, inventory tap modes, phone graphics, and screenshots at a phone's shape |
 | `tests/pad.gd` | Sends pretend controller input: moving, looking, every button and trigger, the inventory, crafting, map, dialogue, pause and knocked-out screens, and the button names for Xbox, PlayStation and Switch pads |
 | `tests/map_shield.gd` | Checks the map filling in, opening and zooming, the shield recipe, blocking from the front only, perfect blocks, the guard breaking, the Map and Block buttons, and both surviving a save |
+| `tests/lore.gd` | Plays The Seventh Thread both ways: Bryn's story, carvings and inscriptions, Sable's choice, the hymn plates (and a wrong step), the guardians, the Node, the Journal, Orsolya's pages, saving and loading |
 | `tests/wild.gd` | Checks the wild lands: every biome appears, chunks stream in fast enough to glide, edits survive leaving, ruins have chests |
 | `prototype/web/index.html` | The original browser prototype, kept for reference |
 

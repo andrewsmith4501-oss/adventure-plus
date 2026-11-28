@@ -199,7 +199,7 @@ func _input(event: InputEvent) -> void:
 				_handle_trigger(right, now)
 		# While the inventory or map is open the sticks are read here, not by
 		# the menus' own focus moving.
-		if _screen_open("inv") or _screen_open("map"):
+		if _screen_open("inv") or _screen_open("map") or _screen_open("journal"):
 			get_viewport().set_input_as_handled()
 	elif enabled:
 		if event is InputEventKey and event.pressed:
@@ -228,6 +228,12 @@ func _handle_button(b: int, down: bool) -> bool:
 		if down:
 			_map_button(b)
 		return true
+	if _screen_open("journal"):
+		if down and b in [JOY_BUTTON_B, JOY_BUTTON_BACK, JOY_BUTTON_START, JOY_BUTTON_A]:
+			game.close_menu()
+		elif down and (b == JOY_BUTTON_DPAD_UP or b == JOY_BUTTON_DPAD_DOWN):
+			game.hud.journal_scroll.scroll_vertical += -120 if b == JOY_BUTTON_DPAD_UP else 120
+		return true
 	if not game.running:
 		if not down:
 			return false
@@ -243,6 +249,13 @@ func _handle_button(b: int, down: bool) -> bool:
 		return false
 	if game.player.dead:
 		return false
+	if game.choosing():
+		if down and (b == JOY_BUTTON_DPAD_UP or b == JOY_BUTTON_DPAD_LEFT):
+			game.choice_move(-1)
+			return true
+		if down and (b == JOY_BUTTON_DPAD_DOWN or b == JOY_BUTTON_DPAD_RIGHT):
+			game.choice_move(1)
+			return true
 	if game.talking():
 		if down and (b == JOY_BUTTON_A or b == JOY_BUTTON_X):
 			game.advance_dialog()
@@ -387,6 +400,9 @@ func _map_button(b: int) -> void:
 
 # ---------------------------------------------------------------- every frame
 
+var _choice_dir := 0
+
+
 func _process(dt: float) -> void:
 	if game == null or not enabled:
 		return
@@ -405,6 +421,21 @@ func _process(dt: float) -> void:
 			mv.queue_redraw()
 		move = Vector2.ZERO
 		return
+	if _screen_open("journal"):
+		var sy := l.y + r.y
+		if absf(sy) > 0.0:
+			game.hud.journal_scroll.scroll_vertical += int(sy * 900.0 * dt)
+		move = Vector2.ZERO
+		return
+	if game.choosing():
+		# Tilting the left stick up or down moves between the answers.
+		var d := 0 if absf(l.y) < 0.6 else (1 if l.y > 0 else -1)
+		if d != _choice_dir:
+			_choice_dir = d
+			if d != 0:
+				game.choice_move(d)
+	else:
+		_choice_dir = 0
 	if not _world_active() or game.talking():
 		move = Vector2.ZERO
 		return

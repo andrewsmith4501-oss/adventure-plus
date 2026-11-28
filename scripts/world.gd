@@ -139,6 +139,15 @@ const SHRINE_Z1 := 92
 const SHRINE_FY := 17
 # Wren's river crossing, north-east of camp.
 const FORD_Z := 40
+# The Sanctum of the Six Knots, under the hill south-east of camp, where the
+# Last Knot's first strand was tied. The Stilling Stones stand at its door.
+const SANC_X0 := 27
+const SANC_X1 := 43
+const SANC_Z0 := 74
+const SANC_Z1 := 86
+const SANC_FY := 11
+const STONES_X := 35
+const STONES_Z := 66
 # A small meadow that floats above Hearthvale near the Steppes cliffs.
 const ISLE_X := 90
 const ISLE_Z := 24
@@ -157,9 +166,12 @@ var hollow := {}
 var vents := {}
 ## Puzzle positions inside the Hearthroot Shrine, filled in by generate().
 var shrine := {}
+## The Sanctum of the Six Knots: plates (in the hymn's left-to-right order),
+## door, veil, node, guardian spots.
+var sanctum := {}
 ## Readable tablets: Vector3i -> key of the text (game.gd holds the words).
 var tablets := {}
-## Thread Nodes: Vector3i -> "hollow" or "shrine".
+## Thread Nodes: Vector3i -> "hollow", "shrine" or "sanctum".
 var nodes := {}
 ## Chests: Vector3i -> key of what is inside.
 var chests := {}
@@ -400,6 +412,8 @@ func region_at(p: Vector3) -> String:
 		return "hollow"
 	if in_shrine(p):
 		return "shrine"
+	if in_sanctum(p):
+		return "sanctum"
 	var edge := STEPPE_X + (fbm(p.z * 0.06, 3.0) - 0.5) * 10.0
 	return "steppes" if p.x > edge - 1.0 else "hearthvale"
 
@@ -410,6 +424,10 @@ func in_hollow(p: Vector3) -> bool:
 
 func in_shrine(p: Vector3) -> bool:
 	return p.x >= SHRINE_X0 + 1 and p.x < SHRINE_X1 and p.z >= SHRINE_Z0 + 1 and p.z < SHRINE_Z1 and p.y >= SHRINE_FY - 1 and p.y < SHRINE_FY + 9
+
+
+func in_sanctum(p: Vector3) -> bool:
+	return p.x >= SANC_X0 + 1 and p.x < SANC_X1 and p.z >= SANC_Z0 + 1 and p.z < SANC_Z1 and p.y >= SANC_FY - 1 and p.y < SANC_FY + 7
 
 
 ## True when nothing is overhead (gusts only reach you outdoors).
@@ -521,9 +539,11 @@ func generate() -> void:
 
 	# Level the camp and the apron in front of the Hollow.
 	var camp_h := heights[CAMP_X + CAMP_Z * W]
-	_flatten(CAMP_X - 8, CAMP_Z - 7, CAMP_X + 7, CAMP_Z + 7, camp_h, 3)
 	_flatten(HOLLOW_X0 - 9, HOLLOW_Z0 + 2, HOLLOW_X0 - 1, HOLLOW_Z1 - 2, HOLLOW_FY - 1, 3)
 	_flatten(SHRINE_X0 - 7, SHRINE_Z0 + 3, SHRINE_X0 - 1, SHRINE_Z1 - 3, SHRINE_FY - 1, 3)
+	_flatten(STONES_X - 5, STONES_Z - 3, STONES_X + 5, SANC_Z0 - 4, SANC_FY - 1, 2)
+	# The camp last, so the stones' apron never reaches into it.
+	_flatten(CAMP_X - 8, CAMP_Z - 7, CAMP_X + 7, CAMP_Z + 7, camp_h, 3)
 
 	for z in D:
 		for x in W:
@@ -556,6 +576,7 @@ func generate() -> void:
 	_set_raw(NEEDLE_X, needle_top + 2, NEEDLE_Z, CRYSTAL)
 	_build_hollow()
 	_build_shrine()
+	_build_sanctum()
 	_build_ford()
 	_build_isle()
 	_build_cave()
@@ -727,6 +748,10 @@ func _build_hollow() -> void:
 	nodes[node] = "hollow"
 	var vent := Vector3i(x0 + 15, fy - 1, mid)
 	_set_raw(vent.x, vent.y, vent.z, VENT)
+	# The Galeborn's farewell, carved beside the Node.
+	var carving := Vector3i(x1 - 1, fy + 12, mid + 2)
+	_set_raw(carving.x, carving.y, carving.z, TABLET)
+	tablets[carving] = "lore_hollow"
 	# Before the Node is restored the updraft stops short of the ledge
 	# unless you glide; afterwards it carries you out through the roof.
 	vents[vent] = 15
@@ -795,6 +820,10 @@ func _build_shrine() -> void:
 	var node := Vector3i(x1 - 1, fy + 4, mid)
 	_set_raw(node.x, node.y, node.z, NODE)
 	nodes[node] = "shrine"
+	# A Hearthfolk prayer on the ledge, by the Node.
+	var prayer := Vector3i(x1 - 1, fy + 4, mid - 2)
+	_set_raw(prayer.x, prayer.y, prayer.z, TABLET)
+	tablets[prayer] = "lore_shrine"
 	# Gates between the rooms.
 	var gate1 := [Vector3i(x0 + 7, fy, mid - 1), Vector3i(x0 + 7, fy + 2, mid)]
 	var gate2 := [Vector3i(x0 + 15, fy, mid - 1), Vector3i(x0 + 15, fy + 2, mid)]
@@ -831,6 +860,89 @@ func _build_shrine() -> void:
 		"veil": veil,
 		"node": node,
 		"chest": chest,
+	}
+
+
+## The Sanctum of the Six Knots: a Loomstone hall under the hill south-east of
+## camp. The Hall of the Six has a plate and a carved tablet for each Weaver
+## (the plates light up only when walked in the order of the First Weaving);
+## behind its door, the Heart of the Knot keeps a Thread Node inside a veil of
+## threads, a chest and Orsolya Vane's last words. The Stilling Stones, six
+## standing stones, ring the ground in front of the door.
+func _build_sanctum() -> void:
+	var fy := SANC_FY
+	var x0 := SANC_X0
+	var x1 := SANC_X1
+	var z0 := SANC_Z0
+	var z1 := SANC_Z1
+	var mid := (x0 + x1) / 2  # 35
+	_fill(x0, fy - 1, z0, x1, fy + 7, z1, LOOMSTONE)
+	for z in range(z0, z1 + 1):
+		for x in range(x0, x1 + 1):
+			_set_raw(x, fy + 8, z, GRASS if _hash3(x, 2, z) > 0.25 else DIRT)
+			if _hash3(x, 3, z) > 0.93:
+				_set_raw(x, fy + 9, z, LEAVES)
+	# Entrance tunnel on the north side, facing the stones and the camp.
+	_fill(mid - 2, fy - 1, z0 - 4, mid + 1, fy + 3, z0, LOOMSTONE)
+	_fill(mid - 1, fy, z0 - 5, mid, fy + 2, z0, AIR)
+	# The Hall of the Six, and the Heart of the Knot behind it.
+	var wall := z0 + 6
+	_fill(x0 + 1, fy, z0 + 1, x1 - 1, fy + 4, wall - 1, AIR)
+	_fill(x0 + 1, fy, wall + 1, x1 - 1, fy + 5, z1 - 1, AIR)
+	var door := [Vector3i(mid - 1, fy, wall), Vector3i(mid, fy + 2, wall)]
+	_fill(door[0].x, door[0].y, door[0].z, door[1].x, door[1].y, door[1].z, LOOMDOOR)
+	# Six plates, left to right as you face the door, and above each the
+	# Weaver it belongs to.
+	var gods := ["hessa", "aeron", "duun", "ilvy", "maru", "solenne"]
+	var xs := [mid - 6, mid - 4, mid - 2, mid + 2, mid + 4, mid + 6]
+	var plates: Array = []
+	for i in gods.size():
+		var p := Vector3i(xs[i], fy - 1, wall - 2)
+		_set_raw(p.x, p.y, p.z, PLATE)
+		plates.append(p)
+		var t := Vector3i(xs[i], fy + 1, wall)
+		_set_raw(t.x, t.y, t.z, TABLET)
+		tablets[t] = "sanc_" + gods[i]
+	var hymn := Vector3i(mid + 2, fy + 1, z0)
+	_set_raw(hymn.x, hymn.y, hymn.z, TABLET)
+	tablets[hymn] = "sanc_hymn"
+	# The Node sits in a cage of threads that parts once its guardians fall.
+	var node := Vector3i(mid, fy, z1 - 2)
+	_fill(node.x - 1, fy, node.z - 1, node.x + 1, fy + 1, node.z + 1, LOOMDOOR)
+	_set_raw(node.x, node.y, node.z, NODE)
+	nodes[node] = "sanctum"
+	var chest := Vector3i(x1 - 2, fy, z1 - 2)
+	_set_raw(chest.x, chest.y, chest.z, CHEST)
+	chests[chest] = "sanctum"
+	var last := Vector3i(x1, fy + 1, z1 - 3)
+	_set_raw(last.x, last.y, last.z, TABLET)
+	tablets[last] = "sanc_orsolya"
+	_vein_band(fy + 3, x0 + 1, z0 + 1, x1 - 1, wall - 1)
+	_vein_band(fy + 4, x0 + 1, wall + 1, x1 - 1, z1 - 1)
+	for p in [Vector3i(mid - 3, fy + 3, z0 + 1), Vector3i(mid + 3, fy + 3, z0 + 1), Vector3i(x0 + 1, fy + 3, z1 - 2), Vector3i(x1 - 1, fy + 3, z1 - 2)]:
+		_set_raw(p.x, p.y, p.z, LANTERN)
+	# The Stilling Stones: six standing stones, one for each Knot.
+	var stones: Array = []
+	for i in 6:
+		var a := TAU * i / 6.0 + PI / 6.0
+		var sx := STONES_X + roundi(cos(a) * 4.0)
+		var sz := STONES_Z + roundi(sin(a) * 4.0)
+		var g := heights[sx + sz * W]
+		var tall := 3 if i % 2 == 0 else 2
+		for y in range(g + 1, g + 1 + tall):
+			_set_raw(sx, y, sz, LOOMSTONE)
+		_set_raw(sx, g + 1 + tall, sz, LOOMVEIN)
+		stones.append(Vector3i(sx, g, sz))
+	sanctum = {
+		"plates": plates,
+		"gods": gods,
+		"door": door,
+		"veil": [Vector3i(node.x - 1, fy, node.z - 1), Vector3i(node.x + 1, fy + 1, node.z + 1)],
+		"node": node,
+		"chest": chest,
+		"guards": [Vector3(x0 + 3.5, fy, wall + 2.5), Vector3(x1 - 3.5, fy, wall + 2.5), Vector3(mid + 0.5, fy, wall + 3.5)],
+		"sable": Vector3(STONES_X + 0.5, 0.0, STONES_Z + 0.5),
+		"stones": stones,
 	}
 
 
@@ -1925,6 +2037,14 @@ func _add_chest(vol: PackedByteArray, ox: int, oz: int, p: Vector3i, key: String
 		chests_in.append([p, key])
 
 
+## A carved inscription in a ruin, about the realm it stands in.
+func _add_inscription(vol: PackedByteArray, ox: int, oz: int, p: Vector3i, chests_in: Array) -> void:
+	var biome: String = BIOMES[_column(p.x, p.z).y]
+	var key := "tablet:ruin_%s_%d" % [biome, floori(_hash3(p.x, 505, p.z) * 3.0)]
+	_add_chest(vol, ox, oz, p, key, chests_in)
+	_vset(vol, ox, oz, p.x, p.y, p.z, TABLET)
+
+
 func _stamp_court(vol: PackedByteArray, ox: int, oz: int, rx: int, h: int, rz: int, chests_in: Array) -> void:
 	for dz in range(-3, 4):
 		for dx in range(-3, 4):
@@ -1948,6 +2068,7 @@ func _stamp_court(vol: PackedByteArray, ox: int, oz: int, rx: int, h: int, rz: i
 					_vset(vol, ox, oz, x, y, z, BRICKS if _hash3(x, y, z) > 0.3 else LOOMSTONE)
 	_vset(vol, ox, oz, rx - 1, h + 1, rz, LANTERN)
 	_add_chest(vol, ox, oz, Vector3i(rx, h + 1, rz), "ruin", chests_in)
+	_add_inscription(vol, ox, oz, Vector3i(rx + 1, h + 1, rz), chests_in)
 
 
 func _stamp_tower(vol: PackedByteArray, ox: int, oz: int, rx: int, h: int, rz: int, chests_in: Array) -> void:
@@ -1978,6 +2099,7 @@ func _stamp_tower(vol: PackedByteArray, ox: int, oz: int, rx: int, h: int, rz: i
 		_vset(vol, ox, oz, rx, y, rz + 1, LADDER)
 	_vset(vol, ox, oz, rx, h + th - 2, rz + 1, AIR)
 	_add_chest(vol, ox, oz, Vector3i(rx - 1, h + th - 1, rz - 1), "tower", chests_in)
+	_add_inscription(vol, ox, oz, Vector3i(rx + 1, h + 1, rz - 1), chests_in)
 
 
 ## Floating isles drift over the wild lands, one in some 144-block squares.
@@ -2027,7 +2149,11 @@ func _store(res: Dictionary) -> void:
 	_cdata[k] = res["data"]
 	_ctop[k] = res["top"]
 	for ch in res["chests"]:
-		chests[ch[0]] = ch[1]
+		var key: String = ch[1]
+		if key.begins_with("tablet:"):
+			tablets[ch[0]] = key.substr(7)
+		else:
+			chests[ch[0]] = key
 	# Lantern light near here was worked out without these blocks.
 	for dz in range(-1, 2):
 		for dx in range(-1, 2):
