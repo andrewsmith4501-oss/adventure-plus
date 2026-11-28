@@ -5,7 +5,7 @@ extends Node3D
 
 var pos := Vector3.ZERO
 var display_name := "Bryn"
-## "bryn" or "wren"; set before adding to the tree.
+## "bryn", "wren" or "sable"; set before adding to the tree.
 var look := "bryn"
 ## Needed for walking, so the feet follow the ground.
 var world
@@ -40,6 +40,8 @@ func _eyes(y: float, z: float, brow: Color) -> void:
 func _ready() -> void:
 	if look == "wren":
 		_build_wren()
+	elif look == "sable":
+		_build_sable()
 	else:
 		_build_bryn()
 
@@ -130,6 +132,44 @@ func _build_wren() -> void:
 	_box(Vector3(0.2, 0.12, 0.02), apron.darkened(0.15), Vector3(0, 0.86, 0.165), self)
 	_box(Vector3(0.03, 0.14, 0.03), Color("e0b04a"), Vector3(0.05, 0.95, 0.17), self)
 	_box(Vector3(0.04, 0.12, 0.03), Color("9aa0a8"), Vector3(-0.05, 0.94, 0.17), self)
+
+
+## Sable, a Shearbearer of the Knotless: a long dark cloak, a hood, a pale
+## mask with a cut thread painted across it, and shears at the belt.
+func _build_sable() -> void:
+	var cloak := Color("2b2833")
+	var lining := Color("6b2f3a")
+	var mask := Color("e6e0d4")
+	for sx in [-0.11, 0.11]:
+		var hip := Node3D.new()
+		hip.position = Vector3(sx, 0.72, 0)
+		add_child(hip)
+		_box(Vector3(0.16, 0.66, 0.18), Color("1e1c24"), Vector3(0, -0.33, 0), hip)
+		_box(Vector3(0.18, 0.1, 0.24), Color("15131a"), Vector3(0, -0.68, 0.03), hip)
+		_legs.append(hip)
+	_box(Vector3(0.52, 0.86, 0.34), cloak, Vector3(0, 0.86, -0.02), self)
+	_box(Vector3(0.2, 0.8, 0.04), lining, Vector3(0, 0.84, 0.16), self)
+	_box(Vector3(0.54, 0.06, 0.36), Color("4a4452"), Vector3(0, 0.82, 0), self)
+	for sx in [-0.31, 0.31]:
+		_box(Vector3(0.14, 0.56, 0.16), cloak, Vector3(sx, 1.04, 0), self)
+		_box(Vector3(0.11, 0.1, 0.11), Color("c7b8a8"), Vector3(sx, 0.74, 0.02), self)
+	# Shears hanging from the belt.
+	_box(Vector3(0.04, 0.26, 0.03), Color("b8bcc6"), Vector3(0.2, 0.66, 0.18), self)
+	_box(Vector3(0.04, 0.26, 0.03), Color("b8bcc6"), Vector3(0.26, 0.66, 0.18), self)
+	_box(Vector3(0.12, 0.06, 0.04), Color("6b2f3a"), Vector3(0.23, 0.8, 0.18), self)
+	_head = Node3D.new()
+	_head.position = Vector3(0, 1.42, 0)
+	add_child(_head)
+	_box(Vector3(0.34, 0.34, 0.32), mask, Vector3(0, 0.17, 0), _head)
+	_eyes(0.2, 0.165, Color("2a2a3a"))
+	# The cut thread across the mask.
+	_box(Vector3(0.3, 0.025, 0.02), lining, Vector3(-0.02, 0.1, 0.17), _head)
+	_box(Vector3(0.04, 0.05, 0.02), Color("2a2a3a"), Vector3(0.09, 0.1, 0.172), _head)
+	# A deep hood.
+	_box(Vector3(0.42, 0.12, 0.4), cloak, Vector3(0, 0.38, -0.02), _head)
+	_box(Vector3(0.06, 0.36, 0.4), cloak, Vector3(-0.2, 0.18, -0.02), _head)
+	_box(Vector3(0.06, 0.36, 0.4), cloak, Vector3(0.2, 0.18, -0.02), _head)
+	_box(Vector3(0.42, 0.4, 0.08), cloak, Vector3(0, 0.18, -0.2), _head)
 
 
 ## Walks through these points in order. A point with y < 0 is placed on the

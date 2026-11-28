@@ -245,6 +245,7 @@ const ART := {
 ## Which pixel art an item uses (items not listed use their own id).
 const ART_OF := {
 	"ssword": "wsword", "isword": "wsword", "sunsword": "wsword",
+	"shears": "wsword", "needle": "wsword",
 	"ipick": "spick", "coal": "lump", "iron_ore": "ore_lump",
 }
 

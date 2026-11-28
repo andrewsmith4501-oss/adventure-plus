@@ -12,6 +12,8 @@ var grounded := false
 var hp := 6
 var alive := true
 var respawn_t := 0.0
+## A Sanctum guardian stays down once defeated (and never wanders off).
+var guardian := false
 var hop_t := 0.0
 var hurt_t := 0.0
 var attack_cd := 0.0
@@ -134,6 +136,8 @@ func hit(damage: int, from: Vector3) -> bool:
 
 func update(dt: float, world: World, player, game) -> void:
 	if not alive:
+		if guardian:
+			return
 		respawn_t -= dt
 		if respawn_t <= 0.0:
 			var spot: Vector2 = game.enemy_spot()
