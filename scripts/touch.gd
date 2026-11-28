@@ -32,6 +32,12 @@ var _buttons := {}
 var _order: Array = []
 
 
+## True on a phone or tablet: the Android app, or the game opened in a
+## phone's web browser.
+static func is_phone() -> bool:
+	return OS.has_feature("mobile") or OS.has_feature("web_android") or OS.has_feature("web_ios")
+
+
 func _ready() -> void:
 	layer = 5
 	_font = ThemeDB.fallback_font
@@ -41,7 +47,7 @@ func _ready() -> void:
 	_draw.draw.connect(_paint)
 	add_child(_draw)
 	visible = false
-	if OS.has_feature("mobile"):
+	if is_phone():
 		set_enabled(true)
 
 
@@ -108,10 +114,10 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch or event is InputEventScreenDrag:
 		if not enabled:
 			set_enabled(true)
-	elif event is InputEventKey and event.pressed and not OS.has_feature("mobile"):
+	elif event is InputEventKey and event.pressed and not is_phone():
 		set_enabled(false)
 		return
-	elif event is InputEventMouseMotion and event.device != InputEvent.DEVICE_ID_EMULATION and not OS.has_feature("mobile"):
+	elif event is InputEventMouseMotion and event.device != InputEvent.DEVICE_ID_EMULATION and not is_phone():
 		# A real mouse moved: go back to mouse and keyboard.
 		if (event as InputEventMouseMotion).relative.length() > 4.0 and _fingers.is_empty():
 			set_enabled(false)

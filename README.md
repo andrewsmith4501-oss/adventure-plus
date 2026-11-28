@@ -61,6 +61,23 @@ The pause screen has a **Graphics** button. **High** loads 10 chunks (160 blocks
 
 From the command line: `godot --headless --export-debug Android export/AdventurePlus.apk`.
 
+## Share it with a link
+
+Friends can play without installing anything at **https://andrewsmith4501-oss.github.io/adventure-plus/**. That page has a **Play in your browser** button (PC, Mac, Android or iPhone) and a **Download for Android** button for the app, with install steps. The site is served by GitHub Pages from the `gh-pages` branch, which holds only the built game.
+
+What the web version does differently:
+
+- It is exported with the **Web** preset (in `export_presets.cfg`) without threads, so it runs on any static host, GitHub Pages included, with no special server headers.
+- In a phone's browser the game uses its phone setup (on-screen controls, phone graphics, big menus). The first tap makes the page full screen and sideways.
+- The world saves in the browser's own storage on that device.
+- In a browser, **Esc** lets go of the mouse; the game notices and pauses. Click to lock the mouse again.
+
+### Update the shared page
+
+1. Export the web build: `godot --headless --export-release Web export/web/index.html`.
+2. Build the APK (see *Build the APK*; reuse the same signing key so phones can update).
+3. On the `gh-pages` branch, replace `play/` with the contents of `export/web/` and `AdventurePlus.apk` with the new APK, then commit and push. GitHub Pages updates in a minute or two.
+
 ## Controls
 
 | Key | Action |

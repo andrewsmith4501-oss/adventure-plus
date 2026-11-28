@@ -368,9 +368,10 @@ func _ready() -> void:
 	pad.game = self
 	hud.pad = pad
 	add_child(pad)
-	if OS.has_feature("mobile"):
+	if TouchControls.is_phone() or OS.has_feature("web"):
 		# Phones have small, very sharp screens: draw the menus and buttons
-		# at a fixed size in UI units so they are big enough to touch.
+		# at a fixed size in UI units so they are big enough to touch. A
+		# web browser window can be any size, so it does the same.
 		var win := get_tree().root
 		win.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
 		win.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
@@ -1252,6 +1253,7 @@ func _resume() -> void:
 	_return_cursor()
 	hud.show_screen("")
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_web_locked = false
 	running = true
 	_new_world_armed = false
 	if not started:
@@ -1390,6 +1392,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		if talking():
 			if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
 				_advance_dialog()
+			return
+		if OS.has_feature("web") and mb.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED and not touch.enabled:
+			# The browser did not lock the mouse yet: this click does it.
+			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 			return
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			mouse_down = mb.pressed
@@ -1549,7 +1555,7 @@ func set_graphics(level: String) -> void:
 
 func _load_settings() -> void:
 	var cf := ConfigFile.new()
-	var level := "phone" if OS.has_feature("mobile") else "high"
+	var level := "phone" if TouchControls.is_phone() else "high"
 	if save_path != "" and cf.load(_settings_path()) == OK:
 		level = cf.get_value("video", "graphics", level)
 	set_graphics(level)
@@ -1636,6 +1642,7 @@ func _process(delta: float) -> void:
 		_update_bridge(dt)
 		var it := _interaction()
 		hud.set_prompt(it.get("text", ""))
+		_check_web_mouse()
 	else:
 		player.wind = Vector3.ZERO
 		player.animate(0.0)
@@ -2350,11 +2357,32 @@ func _update_interaction(dt: float) -> void:
 	_crack.visible = breaking
 
 
+## In a web browser, pressing Escape lets go of the mouse without the game
+## hearing the key. When that happens, pause like Escape does.
+var _web_locked := false
+
+func _check_web_mouse() -> void:
+	if not OS.has_feature("web"):
+		return
+	if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		_web_locked = true
+	elif _web_locked:
+		_web_locked = false
+		if running and not player.dead:
+			_pause()
+
+
 # ---------------------------------------------------------------- saving
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		save_game()
+	elif what == NOTIFICATION_APPLICATION_FOCUS_OUT and OS.has_feature("web"):
+		# A browser tab was switched or closed: keep the world safe.
+		if running and not talking():
+			_pause()
+		else:
+			save_game()
 	elif what == NOTIFICATION_APPLICATION_PAUSED:
 		# A phone switched to another app (it may close this one later).
 		if running and not talking():
@@ -2438,13 +2466,25 @@ func save_game() -> bool:
 	_autosave_t = AUTOSAVE_EVERY
 	if save_path == "":
 		return false
-	var tmp := save_path + ".tmp"
+	# In a web browser files are kept in the browser's storage, which is
+	# only updated when a file is closed (a rename is not stored), so write
+	# the save in place there.
+	var web := OS.has_feature("web")
+	var tmp := save_path if web else save_path + ".tmp"
 	var f := FileAccess.open_compressed(tmp, FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
 	if f == null:
 		push_warning("Could not save the world: %s" % error_string(FileAccess.get_open_error()))
 		return false
 	f.store_var(save_data())
 	f.close()
+	if web:
+		# A compressed file does not tell the browser to store it when it
+		# closes; closing a plain file does, and stores the whole folder.
+		var mark := FileAccess.open(save_path.get_base_dir().path_join("saved.txt"), FileAccess.WRITE)
+		if mark != null:
+			mark.store_string(Time.get_datetime_string_from_system())
+			mark.close()
+		return true
 	var dir := DirAccess.open(save_path.get_base_dir())
 	if dir == null:
 		return false
